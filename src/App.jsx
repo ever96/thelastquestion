@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
 
 export default function App() {
   const mountRef = useRef(null);
@@ -10,11 +11,14 @@ export default function App() {
   const [dialogueText, setDialogueText] = useState("No tengo nada que decirte, detective. Estás perdiendo el tiempo.");
   const [suspectStatus, setSuspectStatus] = useState("Calmado");
 
-  // Referencias para controlar animación y cámara 3D
+  // Referencias para controlar animación, mixer y cámara 3D
   const suspectRef = useRef(null);
   const cameraRef = useRef(null);
+  const mixerRef = useRef(null);
+  const actionsRef = useRef({});
+  const clockRef = useRef(null);
   
-  // Posiciones de cámara para Menú vs Juego
+  // Posiciones de cámara para Menú vs Juego (ajustadas para el modelo GLB)
   const camPositions = {
     MENU: { x: 1.8, y: 1.8, z: 2.2, lookX: -0.2, lookY: 0.9, lookZ: -0.9 },
     PLAYING: { x: 0, y: 1.5, z: 2.6, lookX: 0, lookY: 0.8, lookZ: -0.9 },
@@ -25,6 +29,7 @@ export default function App() {
 
   useEffect(() => {
     const currentMount = mountRef.current;
+    if (!currentMount) return;
     const width = currentMount.clientWidth;
     const height = currentMount.clientHeight;
 
@@ -46,14 +51,12 @@ export default function App() {
     renderer.toneMappingExposure = 1.1;
     currentMount.appendChild(renderer.domElement);
 
-    // 2. MATERIALES
+    // 2. MATERIALES DEL ENTORNO
     const wallMat = new THREE.MeshStandardMaterial({ color: 0x1f2226, roughness: 0.9 });
     const tableMat = new THREE.MeshStandardMaterial({ color: 0x0f1114, roughness: 0.3, metalness: 0.5 });
     const metalMat = new THREE.MeshStandardMaterial({ color: 0x111113, metalness: 0.9, roughness: 0.2 });
-    const clothMat = new THREE.MeshStandardMaterial({ color: 0x2b303a, roughness: 0.8 });
-    const skinMat = new THREE.MeshStandardMaterial({ color: 0xd4a381, roughness: 0.6 });
 
-    // 3. ENTORNO
+    // 3. ENTORNO (Suelo, Paredes, Espejo de interrogatorio)
     const floor = new THREE.Mesh(new THREE.PlaneGeometry(8, 8), wallMat);
     floor.rotation.x = -Math.PI / 2;
     floor.receiveShadow = true;
@@ -71,7 +74,7 @@ export default function App() {
     mirror.position.set(0, 2, -3.49);
     scene.add(mirror);
 
-    // 4. MESA
+    // 4. MESA DE INTERROGATORIO
     const table = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.08, 1.0), tableMat);
     table.position.set(0, 0.75, -0.2);
     table.castShadow = true;
@@ -85,44 +88,53 @@ export default function App() {
       scene.add(leg);
     });
 
-    // 5. SOSPECHOSO (Representación 3D)
+    // 5. CARGA DEL MODELO 3D ANIMADO (desde public/models/detective-animado.glb)
     const suspectGroup = new THREE.Group();
     suspectGroup.position.set(0, 0, -0.9);
     suspectRef.current = suspectGroup;
-
-    const torso = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.6, 0.28), clothMat);
-    torso.position.set(0, 0.8, 0);
-    torso.castShadow = true;
-    suspectGroup.add(torso);
-
-    const head = new THREE.Mesh(new THREE.SphereGeometry(0.14, 16, 16), skinMat);
-    head.scale.set(1, 1.2, 1);
-    head.position.set(0, 1.22, 0.02);
-    head.castShadow = true;
-    suspectGroup.add(head);
-
-    const leftArm = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.5), clothMat);
-    leftArm.position.set(-0.22, 0.72, 0.22);
-    leftArm.rotation.x = Math.PI / 3;
-    leftArm.rotation.z = -Math.PI / 12;
-    leftArm.castShadow = true;
-    suspectGroup.add(leftArm);
-
-    const rightArm = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.5), clothMat);
-    rightArm.position.set(0.22, 0.72, 0.22);
-    rightArm.rotation.x = Math.PI / 3;
-    rightArm.rotation.z = Math.PI / 12;
-    rightArm.castShadow = true;
-    suspectGroup.add(rightArm);
-
-    const hands = new THREE.Mesh(new THREE.SphereGeometry(0.08, 12, 12), skinMat);
-    hands.position.set(0, 0.75, 0.4);
-    hands.castShadow = true;
-    suspectGroup.add(hands);
-
     scene.add(suspectGroup);
 
-    // 6. ILUMINACIÓN
+    const loader = new GLTFLoader();
+    loader.load(
+      '/public/models/detective-animado.glb',
+      (gltf) => {
+        const model = gltf.scene;
+        model.scale.set(1, 1, 1);
+        model.position.set(0, 0, 0);
+        
+        model.traverse((child) => {
+          if (child.isMesh) {
+            child.castShadow = true;
+            child.receiveShadow = true;
+          }
+        });
+        
+        suspectGroup.add(model);
+
+        // Configuración del AnimationMixer y Clips de Animación
+        if (gltf.animations && gltf.animations.length > 0) {
+          const mixer = new THREE.AnimationMixer(model);
+          mixerRef.current = mixer;
+
+          gltf.animations.forEach((clip) => {
+            const action = mixer.clipAction(clip);
+            actionsRef.current[clip.name] = action;
+          });
+
+          // Reproduce por defecto la primera animación integrada
+          const defaultAction = actionsRef.current[gltf.animations[0].name];
+          if (defaultAction) {
+            defaultAction.play();
+          }
+        }
+      },
+      undefined,
+      (error) => {
+        console.error('Error al cargar /models/detective-animado.glb:', error);
+      }
+    );
+
+    // 6. ILUMINACIÓN DRAMÁTICA
     const ambientLight = new THREE.AmbientLight(0x0d1117, 0.25);
     scene.add(ambientLight);
 
@@ -143,10 +155,17 @@ export default function App() {
     // 7. LOOP DE ANIMACIÓN Y CÁMARA
     let animationFrameId;
     let clock = new THREE.Clock();
+    clockRef.current = clock;
 
     const animate = () => {
       animationFrameId = requestAnimationFrame(animate);
+      const delta = clock.getDelta();
       const elapsedTime = clock.getElapsedTime();
+
+      // Actualizar el mezclador de huesos de Three.js
+      if (mixerRef.current) {
+        mixerRef.current.update(delta);
+      }
 
       // Transición suave de Cámara (LERP)
       camera.position.x += (targetCamPos.current.x - camera.position.x) * 0.03;
@@ -162,22 +181,13 @@ export default function App() {
 
       camera.lookAt(targetCamPos.current.lookX, targetCamPos.current.lookY, targetCamPos.current.lookZ);
 
-      // Animación del personaje
-      if (suspectGroup) {
-        suspectGroup.position.y = Math.sin(elapsedTime * 2) * 0.003;
-        if (suspectStress > 60) {
-          suspectGroup.rotation.y = (Math.random() - 0.5) * 0.015;
-        } else {
-          suspectGroup.rotation.y = 0;
-        }
-      }
-
       spotLight.intensity = 120 + Math.sin(elapsedTime * 3) * 5;
       renderer.render(scene, camera);
     };
     animate();
 
     const handleResize = () => {
+      if (!currentMount) return;
       const w = currentMount.clientWidth;
       const h = currentMount.clientHeight;
       camera.aspect = w / h;
@@ -189,10 +199,12 @@ export default function App() {
     return () => {
       window.removeEventListener('resize', handleResize);
       cancelAnimationFrame(animationFrameId);
-      currentMount.removeChild(renderer.domElement);
+      if (currentMount && renderer.domElement) {
+        currentMount.removeChild(renderer.domElement);
+      }
       renderer.dispose();
     };
-  }, [gameState, suspectStress]);
+  }, [gameState]);
 
   // INICIAR JUEGO
   const startGame = () => {
@@ -200,7 +212,7 @@ export default function App() {
     targetCamPos.current = camPositions.PLAYING;
   };
 
-  // INTERACCIÓN DE PREGUNTAS
+  // INTERACCIÓN DE PREGUNTAS Y CAMBIO DE ANIMACIÓN ÓSEA
   const handleQuestion = (option) => {
     targetCamPos.current = camPositions.ZOOM;
 
@@ -208,18 +220,34 @@ export default function App() {
       targetCamPos.current = camPositions.PLAYING;
     }, 3500);
 
+    const playActionByName = (name) => {
+      const actions = actionsRef.current;
+      const targetAction = actions[name];
+      if (targetAction && mixerRef.current) {
+        Object.values(actions).forEach(action => {
+          if (action.isRunning() && action !== targetAction) {
+            action.fadeOut(0.3);
+          }
+        });
+        targetAction.reset().fadeIn(0.3).play();
+      }
+    };
+
     if (option === 1) {
       setSuspectStress((prev) => Math.min(prev + 10, 100));
       setDialogueText("Estaba en mi apartamento solo. Viendo televisión. Nadie puede confirmarlo, ¿y qué?");
       setSuspectStatus("A la defensiva");
+      playActionByName("defensive");
     } else if (option === 2) {
       setSuspectStress((prev) => Math.min(prev + 35, 100));
       setDialogueText("¡¿De dónde sacaste eso?! ¡Eso no es mío! Alguien tuvo que ponerlo ahí, te lo juro.");
       setSuspectStatus("Nervioso / Inestable");
+      playActionByName("nervous");
     } else if (option === 3) {
       setSuspectStress((prev) => Math.max(prev - 15, 0));
       setDialogueText("... (Evita el contacto visual y traga saliva. El silencio lo incomoda).");
       setSuspectStatus("Intimidado");
+      playActionByName("silent");
     }
   };
 
