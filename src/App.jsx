@@ -18,7 +18,7 @@ export default function App() {
   const actionsRef = useRef({});
   const clockRef = useRef(null);
   
-  // Posiciones de cámara para Menú vs Juego (ajustadas para el modelo GLB)
+  // Posiciones de cámara para Menú vs Juego (ajustadas para los modelos GLB)
   const camPositions = {
     MENU: { x: 1.8, y: 1.8, z: 2.2, lookX: -0.2, lookY: 0.9, lookZ: -0.9 },
     PLAYING: { x: 0, y: 1.5, z: 2.6, lookX: 0, lookY: 0.8, lookZ: -0.9 },
@@ -88,18 +88,18 @@ export default function App() {
       scene.add(leg);
     });
 
-    // 5. CARGA DEL MODELO 3D ANIMADO (desde public/models/detective-animado.glb)
+    // 5. CARGA INICIAL (Empieza cargando sentado.glb)
     const suspectGroup = new THREE.Group();
-    suspectGroup.position.set(0, 0, -0.9);
+    suspectGroup.position.set(0, 0, -1.0);
     suspectRef.current = suspectGroup;
     scene.add(suspectGroup);
 
     const loader = new GLTFLoader();
     loader.load(
-      '/public/models/detective-animado.glb',
+      '/models/sentado.glb',
       (gltf) => {
         const model = gltf.scene;
-        model.scale.set(1, 1, 1);
+        model.scale.set(1.6, 1.6, 1.6);
         model.position.set(0, 0, 0);
         
         model.traverse((child) => {
@@ -111,7 +111,7 @@ export default function App() {
         
         suspectGroup.add(model);
 
-        // Configuración del AnimationMixer y Clips de Animación
+        // Configuración inicial del AnimationMixer
         if (gltf.animations && gltf.animations.length > 0) {
           const mixer = new THREE.AnimationMixer(model);
           mixerRef.current = mixer;
@@ -121,7 +121,6 @@ export default function App() {
             actionsRef.current[clip.name] = action;
           });
 
-          // Reproduce por defecto la primera animación integrada
           const defaultAction = actionsRef.current[gltf.animations[0].name];
           if (defaultAction) {
             defaultAction.play();
@@ -130,7 +129,7 @@ export default function App() {
       },
       undefined,
       (error) => {
-        console.error('Error al cargar /models/detective-animado.glb:', error);
+        console.error('Error al cargar /models/sentado.glb:', error);
       }
     );
 
@@ -162,7 +161,7 @@ export default function App() {
       const delta = clock.getDelta();
       const elapsedTime = clock.getElapsedTime();
 
-      // Actualizar el mezclador de huesos de Three.js
+      // Actualizar el AnimationMixer frame por frame
       if (mixerRef.current) {
         mixerRef.current.update(delta);
       }
@@ -212,7 +211,7 @@ export default function App() {
     targetCamPos.current = camPositions.PLAYING;
   };
 
-  // INTERACCIÓN DE PREGUNTAS Y CAMBIO DE ANIMACIÓN ÓSEA
+  // INTERACCIÓN DE PREGUNTAS (Carga dinámicamente detective.glb al interactuar)
   const handleQuestion = (option) => {
     targetCamPos.current = camPositions.ZOOM;
 
@@ -220,34 +219,64 @@ export default function App() {
       targetCamPos.current = camPositions.PLAYING;
     }, 3500);
 
-    const playActionByName = (name) => {
-      const actions = actionsRef.current;
-      const targetAction = actions[name];
-      if (targetAction && mixerRef.current) {
-        Object.values(actions).forEach(action => {
-          if (action.isRunning() && action !== targetAction) {
-            action.fadeOut(0.3);
-          }
-        });
-        targetAction.reset().fadeIn(0.3).play();
+    // Limpiar modelo anterior (sentado.glb) y cargar detective.glb
+    if (suspectRef.current) {
+      while (suspectRef.current.children.length > 0) {
+        suspectRef.current.remove(suspectRef.current.children[0]);
       }
-    };
+
+      const loader = new GLTFLoader();
+      loader.load(
+        '/models/detective.glb',
+        (gltf) => {
+          const model = gltf.scene;
+          model.scale.set(1.6, 1.6, 1.6);
+          model.position.set(0, 0, 0);
+
+          model.traverse((child) => {
+            if (child.isMesh) {
+              child.castShadow = true;
+              child.receiveShadow = true;
+            }
+          });
+
+          suspectRef.current.add(model);
+
+          if (gltf.animations && gltf.animations.length > 0) {
+            const mixer = new THREE.AnimationMixer(model);
+            mixerRef.current = mixer;
+
+            actionsRef.current = {};
+            gltf.animations.forEach((clip) => {
+              const action = mixer.clipAction(clip);
+              actionsRef.current[clip.name] = action;
+            });
+
+            const clipToPlay = gltf.animations[option - 1] || gltf.animations[0];
+            if (clipToPlay) {
+              mixer.clipAction(clipToPlay).reset().fadeIn(0.3).play();
+            }
+          }
+        },
+        undefined,
+        (error) => {
+          console.error('Error al cargar /models/detective.glb:', error);
+        }
+      );
+    }
 
     if (option === 1) {
       setSuspectStress((prev) => Math.min(prev + 10, 100));
       setDialogueText("Estaba en mi apartamento solo. Viendo televisión. Nadie puede confirmarlo, ¿y qué?");
       setSuspectStatus("A la defensiva");
-      playActionByName("defensive");
     } else if (option === 2) {
       setSuspectStress((prev) => Math.min(prev + 35, 100));
       setDialogueText("¡¿De dónde sacaste eso?! ¡Eso no es mío! Alguien tuvo que ponerlo ahí, te lo juro.");
       setSuspectStatus("Nervioso / Inestable");
-      playActionByName("nervous");
     } else if (option === 3) {
       setSuspectStress((prev) => Math.max(prev - 15, 0));
       setDialogueText("... (Evita el contacto visual y traga saliva. El silencio lo incomoda).");
       setSuspectStatus("Intimidado");
-      playActionByName("silent");
     }
   };
 
