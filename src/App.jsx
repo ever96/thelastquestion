@@ -10,15 +10,32 @@ export default function App() {
   const [suspectStress, setSuspectStress] = useState(20);
   const [dialogueText, setDialogueText] = useState("No tengo nada que decirte, detective. Estás perdiendo el tiempo.");
   const [suspectStatus, setSuspectStatus] = useState("Calmado");
+  const [userInput, setUserInput] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [showExpediente, setShowExpediente] = useState(false);
+  const [activeTab, setActiveTab] = useState('INFO');
 
-  // Referencias para controlar animación, mixer y cámara 3D
-  const suspectRef = useRef(null);
+  // Historial de conversación táctico
+  const [chatHistory, setChatHistory] = useState([
+    { sender: 'TÚ', text: '¿Dónde estabas anoche a las 22:00?' },
+    { sender: 'CARTER', text: 'No tengo nada que decirte, detective. Estás perdiendo el tiempo.' }
+  ]);
+
+  // Notas clave del detective
+  const [detectiveNotes, setDetectiveNotes] = useState([
+    { id: 1, text: "Afirma que estaba en su apartamento solo, pero no hay testigos.", category: "Coartada" },
+    { id: 2, text: "Evita el contacto visual directo al mencionar el Bar Central.", category: "Comportamiento" }
+  ]);
+  const [newNoteText, setNewNoteText] = useState('');
+
+  // Referencias para Three.js y modelos
+  const suspectGroupRef = useRef(null);
   const cameraRef = useRef(null);
-  const mixerRef = useRef(null);
-  const actionsRef = useRef({});
+  const mixersRef = useRef([]);
+  const modelsCacheRef = useRef({});
   const clockRef = useRef(null);
   
-  // Posiciones de cámara para Menú vs Juego (ajustadas para los modelos GLB)
+  // Posiciones de cámara
   const camPositions = {
     MENU: { x: 1.8, y: 1.8, z: 2.2, lookX: -0.2, lookY: 0.9, lookZ: -0.9 },
     PLAYING: { x: 0, y: 1.5, z: 2.6, lookX: 0, lookY: 0.8, lookZ: -0.9 },
@@ -56,7 +73,7 @@ export default function App() {
     const tableMat = new THREE.MeshStandardMaterial({ color: 0x0f1114, roughness: 0.3, metalness: 0.5 });
     const metalMat = new THREE.MeshStandardMaterial({ color: 0x111113, metalness: 0.9, roughness: 0.2 });
 
-    // 3. ENTORNO (Suelo, Paredes, Espejo de interrogatorio)
+    // 3. ENTORNO
     const floor = new THREE.Mesh(new THREE.PlaneGeometry(8, 8), wallMat);
     floor.rotation.x = -Math.PI / 2;
     floor.receiveShadow = true;
@@ -88,52 +105,54 @@ export default function App() {
       scene.add(leg);
     });
 
-    // 5. CARGA INICIAL (Empieza cargando sentado.glb)
+    // 5. CONTENEDOR PARA LOS DOS MODELOS 3D
     const suspectGroup = new THREE.Group();
     suspectGroup.position.set(0, 0, -1.0);
-    suspectRef.current = suspectGroup;
+    suspectGroupRef.current = suspectGroup;
     scene.add(suspectGroup);
 
     const loader = new GLTFLoader();
-    loader.load(
-      '/models/sentado.glb',
-      (gltf) => {
-        const model = gltf.scene;
-        model.scale.set(1.6, 1.6, 1.6);
-        model.position.set(0, 0, 0);
-        
-        model.traverse((child) => {
-          if (child.isMesh) {
-            child.castShadow = true;
-            child.receiveShadow = true;
-          }
-        });
-        
-        suspectGroup.add(model);
+    mixersRef.current = [];
 
-        // Configuración inicial del AnimationMixer
-        if (gltf.animations && gltf.animations.length > 0) {
-          const mixer = new THREE.AnimationMixer(model);
-          mixerRef.current = mixer;
+    const loadModelToCache = (name, path, scale, isDefaultVisible = false) => {
+      loader.load(
+        path,
+        (gltf) => {
+          const model = gltf.scene;
+          model.scale.set(scale, scale, scale);
+          model.position.set(0, 0, 0);
+          model.visible = isDefaultVisible;
 
-          gltf.animations.forEach((clip) => {
-            const action = mixer.clipAction(clip);
-            actionsRef.current[clip.name] = action;
+          model.traverse((child) => {
+            if (child.isMesh) {
+              child.castShadow = true;
+              child.receiveShadow = true;
+            }
           });
 
-          const defaultAction = actionsRef.current[gltf.animations[0].name];
-          if (defaultAction) {
-            defaultAction.play();
+          if (gltf.animations && gltf.animations.length > 0) {
+            const mixer = new THREE.AnimationMixer(model);
+            gltf.animations.forEach((clip) => {
+              const action = mixer.clipAction(clip);
+              action.play();
+            });
+            mixersRef.current.push(mixer);
           }
-        }
-      },
-      undefined,
-      (error) => {
-        console.error('Error al cargar /models/sentado.glb:', error);
-      }
-    );
 
-    // 6. ILUMINACIÓN DRAMÁTICA
+          suspectGroup.add(model);
+          modelsCacheRef.current[name] = model;
+        },
+        undefined,
+        (error) => {
+          console.error(`Error al cargar ${path}:`, error);
+        }
+      );
+    };
+
+    loadModelToCache('sentado', '/models/sentado.glb', 1.6, true);
+    loadModelToCache('detective', '/models/detective.glb', 1.6, false);
+
+    // 6. ILUMINACIÓN
     const ambientLight = new THREE.AmbientLight(0x0d1117, 0.25);
     scene.add(ambientLight);
 
@@ -151,7 +170,7 @@ export default function App() {
     lamp.position.set(0, 2.65, -0.3);
     scene.add(lamp);
 
-    // 7. LOOP DE ANIMACIÓN Y CÁMARA
+    // 7. LOOP
     let animationFrameId;
     let clock = new THREE.Clock();
     clockRef.current = clock;
@@ -161,17 +180,12 @@ export default function App() {
       const delta = clock.getDelta();
       const elapsedTime = clock.getElapsedTime();
 
-      // Actualizar el AnimationMixer frame por frame
-      if (mixerRef.current) {
-        mixerRef.current.update(delta);
-      }
+      mixersRef.current.forEach((mixer) => mixer.update(delta));
 
-      // Transición suave de Cámara (LERP)
       camera.position.x += (targetCamPos.current.x - camera.position.x) * 0.03;
       camera.position.y += (targetCamPos.current.y - camera.position.y) * 0.03;
       camera.position.z += (targetCamPos.current.z - camera.position.z) * 0.03;
 
-      // Órbita panorámica sutil si estamos en el MENÚ
       if (gameState === 'MENU') {
         const orbitRadius = 0.3;
         const menuTargetX = camPositions.MENU.x + Math.sin(elapsedTime * 0.5) * orbitRadius;
@@ -205,87 +219,109 @@ export default function App() {
     };
   }, [gameState]);
 
-  // INICIAR JUEGO
   const startGame = () => {
     setGameState('PLAYING');
     targetCamPos.current = camPositions.PLAYING;
   };
 
-  // INTERACCIÓN DE PREGUNTAS (Carga dinámicamente detective.glb al interactuar)
-  const handleQuestion = (option) => {
+  const switchActiveModel = (modelName) => {
+    const cache = modelsCacheRef.current;
+    Object.keys(cache).forEach((key) => {
+      if (cache[key]) {
+        cache[key].visible = (key === modelName);
+      }
+    });
+  };
+
+  const handleAddNote = (e) => {
+    e.preventDefault();
+    if (!newNoteText.trim()) return;
+    setDetectiveNotes([
+      ...detectiveNotes,
+      { id: Date.now(), text: newNoteText, category: "Observación Personal" }
+    ]);
+    setNewNoteText('');
+  };
+
+  // CHAT GROQ LLM
+  const handleSendMessage = async (e) => {
+    e.preventDefault();
+    if (!userInput.trim() || isLoading) return;
+
+    const currentQuestion = userInput;
+    setUserInput('');
+    setIsLoading(true);
     targetCamPos.current = camPositions.ZOOM;
 
     setTimeout(() => {
       targetCamPos.current = camPositions.PLAYING;
     }, 3500);
 
-    // Limpiar modelo anterior (sentado.glb) y cargar detective.glb
-    if (suspectRef.current) {
-      while (suspectRef.current.children.length > 0) {
-        suspectRef.current.remove(suspectRef.current.children[0]);
+    setChatHistory(prev => [...prev, { sender: 'TÚ', text: currentQuestion }]);
+
+    try {
+      const GROQ_API_KEY = "TU_API_KEY_DE_GROQ"; // Reemplaza con tu API Key real de Groq
+
+      const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${GROQ_API_KEY}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model: "llama-3.3-70b-versatile",
+          messages: [
+            {
+              role: "system",
+              content: `Eres Carter, un sospechoso en un interrogatorio criminal por un thriller psicológico. 
+              Nivel de estrés actual del sospechoso: ${suspectStress}%.
+              Responde estrictamente en formato JSON válido con esta estructura exacta, sin texto extra fuera del JSON:
+              {
+                "dialogue": "Lo que dice Carter en primera persona de forma desafiante, evasiva o nerviosa...",
+                "status": "Estado emocional breve (ej: A la defensiva, Nervioso, Intimidado, Desafiante)",
+                "stressDelta": número entero entre -25 y +35 que indica cuánto sube o baja el estrés según la pregunta del detective,
+                "modelToUse": "sentado" o "detective" (elige 'sentado' si está calmado/neutral y 'detective' si se pone tenso o a la defensiva)
+              }`
+            },
+            {
+              role: "user",
+              content: currentQuestion
+            }
+          ],
+          response_format: { type: "json_object" },
+          temperature: 0.7
+        })
+      });
+
+      const data = await response.json();
+      const result = JSON.parse(data.choices[0].message.content);
+
+      setDialogueText(result.dialogue);
+      setSuspectStatus(result.status);
+      setSuspectStress((prev) => Math.max(0, Math.min(100, prev + result.stressDelta)));
+      
+      if (result.modelToUse && (result.modelToUse === 'sentado' || result.modelToUse === 'detective')) {
+        switchActiveModel(result.modelToUse);
       }
 
-      const loader = new GLTFLoader();
-      loader.load(
-        '/models/detective.glb',
-        (gltf) => {
-          const model = gltf.scene;
-          model.scale.set(1.6, 1.6, 1.6);
-          model.position.set(0, 0, 0);
+      setChatHistory(prev => [...prev, { sender: 'CARTER', text: result.dialogue }]);
 
-          model.traverse((child) => {
-            if (child.isMesh) {
-              child.castShadow = true;
-              child.receiveShadow = true;
-            }
-          });
-
-          suspectRef.current.add(model);
-
-          if (gltf.animations && gltf.animations.length > 0) {
-            const mixer = new THREE.AnimationMixer(model);
-            mixerRef.current = mixer;
-
-            actionsRef.current = {};
-            gltf.animations.forEach((clip) => {
-              const action = mixer.clipAction(clip);
-              actionsRef.current[clip.name] = action;
-            });
-
-            const clipToPlay = gltf.animations[option - 1] || gltf.animations[0];
-            if (clipToPlay) {
-              mixer.clipAction(clipToPlay).reset().fadeIn(0.3).play();
-            }
-          }
-        },
-        undefined,
-        (error) => {
-          console.error('Error al cargar /models/detective.glb:', error);
-        }
-      );
-    }
-
-    if (option === 1) {
-      setSuspectStress((prev) => Math.min(prev + 10, 100));
-      setDialogueText("Estaba en mi apartamento solo. Viendo televisión. Nadie puede confirmarlo, ¿y qué?");
-      setSuspectStatus("A la defensiva");
-    } else if (option === 2) {
-      setSuspectStress((prev) => Math.min(prev + 35, 100));
-      setDialogueText("¡¿De dónde sacaste eso?! ¡Eso no es mío! Alguien tuvo que ponerlo ahí, te lo juro.");
-      setSuspectStatus("Nervioso / Inestable");
-    } else if (option === 3) {
-      setSuspectStress((prev) => Math.max(prev - 15, 0));
-      setDialogueText("... (Evita el contacto visual y traga saliva. El silencio lo incomoda).");
-      setSuspectStatus("Intimidado");
+    } catch (error) {
+      console.error("Error al conectar con Groq:", error);
+      const fallbackText = "... (El sospechoso guarda silencio absoluto y te mira con desprecio).";
+      setDialogueText(fallbackText);
+      setSuspectStatus("Evasivo");
+      setChatHistory(prev => [...prev, { sender: 'CARTER', text: fallbackText }]);
+    } finally {
+      setIsLoading(false);
     }
   };
 
   return (
-    <div style={{ width: '100vw', height: '100vh', position: 'relative', overflow: 'hidden', background: '#000' }}>
-      {/* 3D Canvas */}
+    <div style={{ width: '100vw', height: '100vh', position: 'relative', overflow: 'hidden', background: '#000', userSelect: 'none' }}>
       <div ref={mountRef} style={{ width: '100%', height: '100%' }} />
 
-      {/* BARRAS NEGRAS CINE */}
+      {/* MARCOS CINEMATOGRÁFICOS SUPERIOR E INFERIOR */}
       <div style={topBar} />
       <div style={bottomBar} />
 
@@ -297,110 +333,327 @@ export default function App() {
             <h1 style={gameTitle}>THE LAST QUESTION</h1>
             <p style={gameDesc}>
               Caso #409: Interrogatorio en curso.<br />
-              Tienes pocos minutos antes de que el abogado del sospechoso llegue.
+              Tienes pocos minutos antes de que el abogado del sospechoso llegue a liberarlo.
             </p>
             <div style={btnGroup}>
               <button style={startBtn} onClick={startGame}>
                 INICIAR INTERROGATORIO
-              </button>
-              <button style={secondaryBtn} onClick={() => alert("Usa las preguntas estratégicamente para hacer colapsar al sospechoso.")}>
-                EXPEDIENTE DEL CASO
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* ==================== INTERFAZ DE JUEGO ==================== */}
+      {/* ==================== INTERFAZ DE JUEGO HUD TÁCTICO ==================== */}
       {gameState === 'PLAYING' && (
         <>
-          <div style={headerUI}>
-            <h2 style={{ margin: 0, fontSize: '1.2rem', letterSpacing: '3px', color: '#e2e2e2' }}>SUJETO #409 - "CARTER"</h2>
-            <div style={{ marginTop: '8px', display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <span style={{ fontSize: '0.8rem', color: '#aaa' }}>ESTRÉS: {suspectStress}%</span>
-              <div style={stressBarBackground}>
-                <div style={{ ...stressBarFill, width: `${suspectStress}%`, background: suspectStress > 60 ? '#d93838' : '#e2a03f' }} />
+          {/* BARRA SUPERIOR DE ESTADO & REC */}
+          <div style={hudHeader}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+              <span style={recIndicator}>● REC 00:18:32</span>
+              <h2 style={suspectTitleHeader}>SUJETO #409 — "CARTER"</h2>
+            </div>
+            <button style={expedienteBtn} onClick={() => setShowExpediente(true)}>
+              📁 EXPEDIENTE & NOTAS
+            </button>
+          </div>
+
+          {/* PANEL LATERAL IZQUIERDO: Métricas y Evidencias */}
+          <div style={leftPanel}>
+            <div style={panelSection}>
+              <h4 style={panelTitle}>ESTADO PSICOLÓGICO</h4>
+              <div style={{ margin: '10px 0' }}>
+                <div style={{ display: 'flex', justifyContent: 'between', fontSize: '0.75rem', color: '#aaa', marginBottom: '4px' }}>
+                  <span>NIVEL DE ESTRÉS</span>
+                  <span style={{ color: suspectStress > 60 ? '#d93838' : '#e2a03f', fontWeight: 'bold' }}>{suspectStress}%</span>
+                </div>
+                <div style={stressBarBackground}>
+                  <div style={{ ...stressBarFill, width: `${suspectStress}%`, background: suspectStress > 60 ? '#d93838' : '#e2a03f' }} />
+                </div>
+                <span style={{ fontSize: '0.7rem', color: '#888', fontStyle: 'italic', display: 'block', marginTop: '4px' }}>
+                  Estado: [{suspectStatus}]
+                </span>
               </div>
-              <span style={{ fontSize: '0.75rem', color: '#888', fontStyle: 'italic' }}>[{suspectStatus}]</span>
+            </div>
+
+            <div style={panelSection}>
+              <h4 style={panelTitle}>EVIDENCIAS CLAVE</h4>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '8px' }}>
+                <div style={evidenceBadge}>📷 Foto Bar Central (22:05)</div>
+                <div style={evidenceBadge}>📄 Recibo de taxi (22:42)</div>
+                <div style={evidenceBadge}>✉️ Mensaje de Laura (Sin leer)</div>
+              </div>
             </div>
           </div>
 
+          {/* PANEL LATERAL DERECHO: Historial de Conversación */}
+          <div style={rightPanel}>
+            <h4 style={panelTitle}>HISTORIAL DE CONVERSACIÓN</h4>
+            <div style={historyScrollContainer}>
+              {chatHistory.map((msg, index) => (
+                <div key={index} style={historyItem}>
+                  <span style={{ color: msg.sender === 'TÚ' ? '#e2a03f' : '#64748b', fontWeight: 'bold', fontSize: '0.65rem' }}>
+                    {msg.sender}:
+                  </span>
+                  <p style={{ margin: '3px 0 0 0', fontSize: '0.78rem', color: '#cbd5e1', lineHeight: '1.35' }}>
+                    {msg.text}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* CAJA DE DIÁLOGO CENTRAL INFERIOR */}
           <div style={dialogueBox}>
-            <p style={characterName}>SUSPECT CARTER</p>
+            <div style={characterNameTag}>CARTER (SUJETO)</div>
             <p style={dialogueContent}>"{dialogueText}"</p>
           </div>
 
-          <div style={optionsContainer}>
-            <button style={optionBtn} onClick={() => handleQuestion(1)}>
-              <span style={btnNumber}>01.</span> "¿Dónde estabas anoche a las 11:00 PM?"
+          {/* BARRA DE ENTRADA DE CHAT & ACCIONES */}
+          <form onSubmit={handleSendMessage} style={chatBarContainer}>
+            <input 
+              type="text" 
+              value={userInput} 
+              onChange={(e) => setUserInput(e.target.value)}
+              placeholder={isLoading ? "El sospechoso está analizando tu respuesta..." : "Escribe tu pregunta, objeción o acusación..."}
+              disabled={isLoading}
+              style={textInputStyle}
+            />
+            <button type="submit" disabled={isLoading} style={sendBtnStyle}>
+              {isLoading ? "ANALIZANDO..." : "INTERROGAR"}
             </button>
-            <button style={optionBtn} onClick={() => handleQuestion(2)}>
-              <span style={btnNumber}>02.</span> [Mostrar foto de la escena del crimen]
-            </button>
-            <button style={optionBtn} onClick={() => handleQuestion(3)}>
-              <span style={btnNumber}>03.</span> [Mirenlo en silencio sin pestañear]
-            </button>
-          </div>
+          </form>
         </>
+      )}
+
+      {/* ==================== MODAL DE EXPEDIENTE & NOTAS ==================== */}
+      {showExpediente && (
+        <div style={modalOverlay}>
+          <div style={modalContent}>
+            <div style={modalHeader}>
+              <h2 style={{ margin: 0, fontSize: '1rem', letterSpacing: '2px', color: '#e2a03f' }}>EXPEDIENTE DEL CASO #409: LA MUERTE DE LAURA DAVIS</h2>
+              <button style={closeBtn} onClick={() => setShowExpediente(false)}>✕ CERRAR</button>
+            </div>
+
+            <div style={tabContainer}>
+              <button 
+                style={{ ...tabBtn, borderBottom: activeTab === 'INFO' ? '2px solid #e2a03f' : '2px solid transparent', color: activeTab === 'INFO' ? '#e2a03f' : '#64748b' }}
+                onClick={() => setActiveTab('INFO')}
+              >
+                📋 DATOS Y OBJETIVOS
+              </button>
+              <button 
+                style={{ ...tabBtn, borderBottom: activeTab === 'NOTAS' ? '2px solid #e2a03f' : '2px solid transparent', color: activeTab === 'NOTAS' ? '#e2a03f' : '#64748b' }}
+                onClick={() => setActiveTab('NOTAS')}
+              >
+                📝 LIBRETA DE NOTAS ({detectiveNotes.length})
+              </button>
+            </div>
+
+            <div style={modalBody}>
+              {activeTab === 'INFO' ? (
+                <div style={{ display: 'flex', gap: '30px', width: '100%' }}>
+                  <div style={{ flex: 1 }}>
+                    <h3 style={modalSubTitle}>INFORMACIÓN GENERAL</h3>
+                    <p style={modalText}><strong>Fecha:</strong> 14 de octubre, 23:47[cite: 1]</p>
+                    <p style={modalText}><strong>Lugar:</strong> Apartamento 7B[cite: 1]</p>
+                    <p style={modalText}><strong>Estado:</strong> Investigación en curso[cite: 1]</p>
+                    
+                    <h3 style={{ ...modalSubTitle, marginTop: '20px' }}>OBJETIVOS ACTUALES</h3>
+                    <ul style={{ paddingLeft: '18px', color: '#cbd5e1', lineHeight: '1.5', fontSize: '0.85rem' }}>
+                      <li>Descubre qué hizo Carter esa noche[cite: 1].</li>
+                      <li>Averigua su relación con la víctima[cite: 1].</li>
+                      <li>Encuentra contradicciones en su coartada[cite: 1].</li>
+                    </ul>
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <h3 style={modalSubTitle}>DIRECTRICES DE INTERROGATORIO</h3>
+                    <p style={{ fontSize: '0.85rem', color: '#94a3b8', lineHeight: '1.5', fontStyle: 'italic' }}>
+                      "Lo que dice el sospechoso no siempre coincide con su lenguaje corporal o su nivel de estrés[cite: 1]. Mantén la presión sin cruzar la línea o exigirá un abogado."
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '15px' }}>
+                  <p style={{ fontSize: '0.85rem', color: '#94a3b8', margin: 0 }}>
+                    Anota tus deducciones clave o contradicciones detectadas durante el interrogatorio:
+                  </p>
+                  
+                  <form onSubmit={handleAddNote} style={{ display: 'flex', gap: '10px' }}>
+                    <input 
+                      type="text" 
+                      placeholder="Escribe una nueva nota de investigación..." 
+                      value={newNoteText}
+                      onChange={(e) => setNewNoteText(e.target.value)}
+                      style={noteInputStyle}
+                    />
+                    <button type="submit" style={addNoteBtn}>AÑADIR NOTA</button>
+                  </form>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '35vh', overflowY: 'auto', paddingRight: '5px' }}>
+                    {detectiveNotes.map((note) => (
+                      <div key={note.id} style={noteCard}>
+                        <span style={noteCategoryTag}>{note.category}</span>
+                        <p style={{ margin: '4px 0 0 0', color: '#e2e8f0', fontSize: '0.85rem' }}>{note.text}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
 }
 
-// ESTILOS DE LA INTERFAZ
-const topBar = { position: 'absolute', top: 0, left: 0, width: '100%', height: '50px', background: '#000', zIndex: 10 };
-const bottomBar = { position: 'absolute', bottom: 0, left: 0, width: '100%', height: '50px', background: '#000', zIndex: 10 };
+// ==================== ESTILOS TÁCTICOS Y CINEMATOGRÁFICOS ====================
+const topBar = { position: 'absolute', top: 0, left: 0, width: '100%', height: '35px', background: '#000', zIndex: 10 };
+const bottomBar = { position: 'absolute', bottom: 0, left: 0, width: '100%', height: '35px', background: '#000', zIndex: 10 };
 
 // MENÚ ESTILOS
 const menuOverlay = {
   position: 'absolute', top: 0, left: 0, width: '100%', height: '100%',
   display: 'flex', alignItems: 'center', justifyContent: 'flex-start',
-  paddingLeft: '10%', background: 'linear-gradient(90deg, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.3) 60%, rgba(0,0,0,0) 100%)',
+  paddingLeft: '10%', background: 'radial-gradient(circle at center, rgba(15,23,42,0.85) 0%, rgba(2,2,3,0.95) 100%)',
   zIndex: 20, fontFamily: 'monospace'
 };
 
-const menuContent = { maxWidth: '500px', color: '#fff' };
-const subtitleTag = { color: '#e2a03f', fontSize: '0.8rem', letterSpacing: '3px', fontWeight: 'bold' };
-const gameTitle = { fontSize: '3rem', margin: '10px 0', letterSpacing: '4px', textTransform: 'uppercase', lineHeight: '1' };
-const gameDesc = { color: '#aaa', fontSize: '0.9rem', lineHeight: '1.6', marginBottom: '30px', fontFamily: 'sans-serif' };
+const menuContent = { maxWidth: '520px', color: '#fff' };
+const subtitleTag = { color: '#e2a03f', fontSize: '0.75rem', letterSpacing: '4px', fontWeight: 'bold' };
+const gameTitle = { fontSize: '3.2rem', margin: '12px 0', letterSpacing: '6px', textTransform: 'uppercase', lineHeight: '1', color: '#f8fafc' };
+const gameDesc = { color: '#94a3b8', fontSize: '0.9rem', lineHeight: '1.6', marginBottom: '35px', fontFamily: 'sans-serif' };
 
 const btnGroup = { display: 'flex', flexDirection: 'column', gap: '12px' };
-
 const startBtn = {
-  background: '#e2a03f', border: 'none', color: '#000', padding: '16px 24px',
-  fontWeight: 'bold', fontSize: '0.9rem', letterSpacing: '2px', cursor: 'pointer',
-  transition: 'transform 0.2s, background 0.2s'
+  background: '#e2a03f', border: 'none', color: '#000', padding: '16px 28px',
+  fontWeight: 'bold', fontSize: '0.85rem', letterSpacing: '3px', cursor: 'pointer',
+  transition: 'all 0.2s ease', boxShadow: '0 4px 20px rgba(226, 160, 63, 0.3)'
 };
 
-const secondaryBtn = {
-  background: 'transparent', border: '1px solid #444', color: '#ccc', padding: '12px 24px',
-  fontSize: '0.8rem', letterSpacing: '1px', cursor: 'pointer'
+// HUD DE JUEGO (PANELES ESPACIADOS Y ORDENADOS)
+const hudHeader = {
+  position: 'absolute', top: '50px', left: '30px', right: '30px', height: '50px',
+  display: 'flex', justifyContent: 'space-between', alignItems: 'center', zIndex: 20, fontFamily: 'monospace'
 };
 
-// JUEGO ESTILOS
-const headerUI = { position: 'absolute', top: '65px', left: '40px', zIndex: 20, fontFamily: 'monospace' };
-const stressBarBackground = { width: '120px', height: '6px', background: '#222', borderRadius: '3px', overflow: 'hidden' };
-const stressBarFill = { height: '100%', transition: 'width 0.5s ease, background 0.5s ease' };
+const recIndicator = { color: '#ef4444', fontSize: '0.75rem', letterSpacing: '2px', fontWeight: 'bold', background: 'rgba(239, 68, 68, 0.1)', padding: '4px 10px', borderRadius: '4px', border: '1px solid rgba(239, 68, 68, 0.3)' };
+const suspectTitleHeader = { margin: 0, fontSize: '1rem', letterSpacing: '3px', color: '#f1f5f9' };
 
+const expedienteBtn = {
+  background: 'rgba(15, 23, 42, 0.9)', border: '1px solid #e2a03f', color: '#e2a03f',
+  padding: '8px 16px', cursor: 'pointer', fontSize: '0.75rem', fontFamily: 'monospace', letterSpacing: '1px',
+  borderRadius: '4px', backdropFilter: 'blur(4px)', transition: 'background 0.2s'
+};
+
+// PANEL IZQUIERDO (Métricas y Evidencias)
+const leftPanel = {
+  position: 'absolute', top: '115px', left: '30px', width: '260px', bottom: '130px',
+  backgroundColor: 'rgba(10, 14, 23, 0.75)', border: '1px solid rgba(51, 65, 85, 0.6)', padding: '16px',
+  zIndex: 20, fontFamily: 'monospace', color: '#cbd5e1', backdropFilter: 'blur(6px)', borderRadius: '6px',
+  display: 'flex', flexDirection: 'column', gap: '20px', boxShadow: '0 8px 32px rgba(0,0,0,0.5)'
+};
+
+const panelSection = { display: 'flex', flexDirection: 'column' };
+const panelTitle = { fontSize: '0.7rem', color: '#e2a03f', letterSpacing: '2px', margin: '0 0 10px 0', borderBottom: '1px solid rgba(51, 65, 85, 0.4)', paddingBottom: '4px' };
+const stressBarBackground = { width: '100%', height: '5px', background: '#1e293b', borderRadius: '3px', overflow: 'hidden' };
+const stressBarFill = { height: '100%', transition: 'width 0.4s ease, background 0.4s ease' };
+const evidenceBadge = { backgroundColor: 'rgba(30, 41, 59, 0.6)', border: '1px solid rgba(51, 65, 85, 0.8)', padding: '8px 10px', borderRadius: '4px', fontSize: '0.75rem', color: '#e2e8f0' };
+
+// PANEL DERECHO (Historial de Conversación)
+const rightPanel = {
+  position: 'absolute', top: '115px', right: '30px', width: '280px', bottom: '130px',
+  backgroundColor: 'rgba(10, 14, 23, 0.75)', border: '1px solid rgba(51, 65, 85, 0.6)', padding: '16px',
+  zIndex: 20, fontFamily: 'monospace', color: '#cbd5e1', backdropFilter: 'blur(6px)', borderRadius: '6px',
+  display: 'flex', flexDirection: 'column', boxShadow: '0 8px 32px rgba(0,0,0,0.5)'
+};
+
+const historyScrollContainer = { flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px', paddingRight: '4px', marginTop: '8px' };
+const historyItem = { backgroundColor: 'rgba(15, 23, 42, 0.6)', border: '1px solid rgba(30, 41, 59, 0.8)', padding: '8px 10px', borderRadius: '4px' };
+
+// CAJA DE DIÁLOGO Y BARRA DE CHAT INFERIOR
 const dialogueBox = {
-  position: 'absolute', bottom: '140px', left: '50%', transform: 'translateX(-50%)',
-  width: '60%', maxWidth: '700px', backgroundColor: 'rgba(10, 12, 16, 0.85)',
-  borderLeft: '3px solid #e2a03f', padding: '15px 25px', backdropFilter: 'blur(4px)',
-  zIndex: 20, fontFamily: 'sans-serif'
+  position: 'absolute', bottom: '90px', left: '315px', right: '325px',
+  backgroundColor: 'rgba(10, 14, 23, 0.9)', borderLeft: '3px solid #e2a03f', borderTop: '1px solid rgba(51,65,85,0.6)',
+  borderRight: '1px solid rgba(51,65,85,0.6)', borderBottom: '1px solid rgba(51,65,85,0.6)',
+  padding: '12px 20px', backdropFilter: 'blur(6px)', zIndex: 20, fontFamily: 'sans-serif', borderRadius: '0 6px 6px 0'
 };
 
-const characterName = { margin: 0, fontSize: '0.75rem', color: '#e2a03f', letterSpacing: '2px', fontWeight: 'bold' };
-const dialogueContent = { margin: '8px 0 0 0', fontSize: '1.05rem', color: '#eee', lineHeight: '1.4', fontStyle: 'italic' };
+const characterNameTag = { margin: 0, fontSize: '0.65rem', color: '#e2a03f', letterSpacing: '2px', fontWeight: 'bold', fontFamily: 'monospace' };
+const dialogueContent = { margin: '6px 0 0 0', fontSize: '0.98rem', color: '#f1f5f9', lineHeight: '1.4', fontStyle: 'italic' };
 
-const optionsContainer = {
-  position: 'absolute', bottom: '65px', left: '50%', transform: 'translateX(-50%)',
-  display: 'flex', gap: '12px', zIndex: 20
+const chatBarContainer = {
+  position: 'absolute', bottom: '45px', left: '315px', right: '325px',
+  display: 'flex', gap: '10px', zIndex: 20
 };
 
-const optionBtn = {
-  background: 'rgba(20, 24, 30, 0.9)', border: '1px solid #333d4d', color: '#ccc',
-  padding: '12px 18px', cursor: 'pointer', fontSize: '0.85rem', fontFamily: 'sans-serif',
-  borderRadius: '4px', outline: 'none'
+const textInputStyle = {
+  flex: 1, background: 'rgba(15, 23, 42, 0.9)', border: '1px solid rgba(51, 65, 85, 0.8)', color: '#fff',
+  padding: '12px 16px', fontSize: '0.85rem', fontFamily: 'sans-serif', borderRadius: '4px', outline: 'none'
 };
 
-const btnNumber = { color: '#e2a03f', fontWeight: 'bold', marginRight: '6px' };
+const sendBtnStyle = {
+  background: '#e2a03f', border: 'none', color: '#000', padding: '0 22px',
+  fontWeight: 'bold', fontSize: '0.75rem', letterSpacing: '2px', cursor: 'pointer', borderRadius: '4px', fontFamily: 'monospace'
+};
+
+// ESTILOS DEL MODAL DE EXPEDIENTE Y NOTAS
+const modalOverlay = {
+  position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh',
+  backgroundColor: 'rgba(2, 2, 3, 0.85)', backdropFilter: 'blur(8px)',
+  display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 100,
+  fontFamily: 'sans-serif'
+};
+
+const modalContent = {
+  width: '75%', maxWidth: '850px', backgroundColor: '#0a0e17',
+  border: '1px solid rgba(51, 65, 85, 0.8)', borderRadius: '8px', overflow: 'hidden', color: '#e2e8f0',
+  boxShadow: '0 20px 50px rgba(0,0,0,0.9)'
+};
+
+const modalHeader = {
+  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+  padding: '18px 25px', backgroundColor: '#0f172a', borderBottom: '1px solid rgba(51, 65, 85, 0.6)'
+};
+
+const closeBtn = {
+  background: 'transparent', border: '1px solid #475569', color: '#cbd5e1',
+  padding: '6px 12px', cursor: 'pointer', fontSize: '0.7rem', fontFamily: 'monospace', borderRadius: '4px'
+};
+
+const tabContainer = {
+  display: 'flex', backgroundColor: '#090d16', borderBottom: '1px solid rgba(51, 65, 85, 0.6)'
+};
+
+const tabBtn = {
+  flex: 1, padding: '12px', background: 'transparent', border: 'none',
+  cursor: 'pointer', fontSize: '0.75rem', fontFamily: 'monospace', fontWeight: 'bold', letterSpacing: '1px'
+};
+
+const modalBody = {
+  display: 'flex', padding: '25px', minHeight: '300px', maxHeight: '60vh', overflowY: 'auto'
+};
+
+const modalColumn = { flex: 1 };
+const modalSubTitle = { fontSize: '0.75rem', color: '#e2a03f', letterSpacing: '2px', margin: '0 0 10px 0' };
+const modalText = { fontSize: '0.85rem', color: '#94a3b8', margin: '6px 0' };
+
+const noteInputStyle = {
+  flex: 1, background: '#0f172a', border: '1px solid rgba(51, 65, 85, 0.8)', color: '#fff',
+  padding: '10px 14px', borderRadius: '4px', fontSize: '0.85rem', outline: 'none'
+};
+
+const addNoteBtn = {
+  background: '#e2a03f', border: 'none', color: '#000', padding: '0 16px',
+  fontWeight: 'bold', fontSize: '0.7rem', cursor: 'pointer', borderRadius: '4px', fontFamily: 'monospace', letterSpacing: '1px'
+};
+
+const noteCard = {
+  backgroundColor: '#0f172a', border: '1px solid rgba(51, 65, 85, 0.6)', padding: '12px',
+  borderRadius: '4px', display: 'flex', flexDirection: 'column', gap: '4px'
+};
+
+const noteCategoryTag = {
+  fontSize: '0.6rem', color: '#e2a03f', fontFamily: 'monospace', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: '1px'
+};
