@@ -14,6 +14,9 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [showExpediente, setShowExpediente] = useState(false);
   const [activeTab, setActiveTab] = useState('INFO');
+  
+  // Estado para versión móvil (alternar paneles inferiores/laterales)
+  const [mobilePanel, setMobilePanel] = useState('chat'); // 'chat' | 'metrics' | 'notes'
 
   // Historial de conversación táctico
   const [chatHistory, setChatHistory] = useState([
@@ -105,7 +108,7 @@ export default function App() {
       scene.add(leg);
     });
 
-    // 5. CONTENEDOR PARA LOS DOS MODELOS 3D
+    // 5. CONTENEDOR PARA LOS MODELOS 3D
     const suspectGroup = new THREE.Group();
     suspectGroup.position.set(0, 0, -1.0);
     suspectGroupRef.current = suspectGroup;
@@ -233,17 +236,32 @@ export default function App() {
     });
   };
 
-  const handleAddNote = (e) => {
+  const handleAddNote = async (e) => {
     e.preventDefault();
     if (!newNoteText.trim()) return;
-    setDetectiveNotes([
-      ...detectiveNotes,
-      { id: Date.now(), text: newNoteText, category: "Observación Personal" }
-    ]);
+
+    try {
+      const response = await fetch("http://localhost:3001/api/notes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: newNoteText, category: "Observación Personal" })
+      });
+      const savedNote = await response.json();
+      if (response.ok) {
+        setDetectiveNotes(prev => [...prev, savedNote]);
+      }
+    } catch (error) {
+      console.error("Error al guardar la nota en el backend:", error);
+      // Fallback local si falla la red
+      setDetectiveNotes(prev => [
+        ...prev,
+        { id: Date.now(), text: newNoteText, category: "Observación Personal" }
+      ]);
+    }
     setNewNoteText('');
   };
 
-  // CHAT GROQ LLM
+  // CHAT CONECTADO AL BACKEND DE NODE (GROQ + SUPABASE)
   const handleSendMessage = async (e) => {
     e.preventDefault();
     if (!userInput.trim() || isLoading) return;
@@ -260,41 +278,18 @@ export default function App() {
     setChatHistory(prev => [...prev, { sender: 'TÚ', text: currentQuestion }]);
 
     try {
-      const GROQ_API_KEY = "TU_API_KEY_DE_GROQ"; // Reemplaza con tu API Key real de Groq
-
-      const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      const response = await fetch("http://localhost:3001/api/interact", {
         method: "POST",
         headers: {
-          "Authorization": `Bearer ${GROQ_API_KEY}`,
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          model: "llama-3.3-70b-versatile",
-          messages: [
-            {
-              role: "system",
-              content: `Eres Carter, un sospechoso en un interrogatorio criminal por un thriller psicológico. 
-              Nivel de estrés actual del sospechoso: ${suspectStress}%.
-              Responde estrictamente en formato JSON válido con esta estructura exacta, sin texto extra fuera del JSON:
-              {
-                "dialogue": "Lo que dice Carter en primera persona de forma desafiante, evasiva o nerviosa...",
-                "status": "Estado emocional breve (ej: A la defensiva, Nervioso, Intimidado, Desafiante)",
-                "stressDelta": número entero entre -25 y +35 que indica cuánto sube o baja el estrés según la pregunta del detective,
-                "modelToUse": "sentado" o "detective" (elige 'sentado' si está calmado/neutral y 'detective' si se pone tenso o a la defensiva)
-              }`
-            },
-            {
-              role: "user",
-              content: currentQuestion
-            }
-          ],
-          response_format: { type: "json_object" },
-          temperature: 0.7
+          currentQuestion,
+          suspectStress
         })
       });
 
-      const data = await response.json();
-      const result = JSON.parse(data.choices[0].message.content);
+      const result = await response.json();
 
       setDialogueText(result.dialogue);
       setSuspectStatus(result.status);
@@ -307,7 +302,7 @@ export default function App() {
       setChatHistory(prev => [...prev, { sender: 'CARTER', text: result.dialogue }]);
 
     } catch (error) {
-      console.error("Error al conectar con Groq:", error);
+      console.error("Error al conectar con el backend:", error);
       const fallbackText = "... (El sospechoso guarda silencio absoluto y te mira con desprecio).";
       setDialogueText(fallbackText);
       setSuspectStatus("Evasivo");
@@ -319,7 +314,7 @@ export default function App() {
 
   return (
     <div style={{ width: '100vw', height: '100vh', position: 'relative', overflow: 'hidden', background: '#000', userSelect: 'none' }}>
-      <div ref={mountRef} style={{ width: '100%', height: '100%' }} />
+      <div ref={mountRef} style={{ width: '100%', height: '100%', position: 'absolute', top: 0, left: 0, zIndex: 1 }} />
 
       {/* MARCOS CINEMATOGRÁFICOS SUPERIOR E INFERIOR */}
       <div style={topBar} />
@@ -344,26 +339,33 @@ export default function App() {
         </div>
       )}
 
-      {/* ==================== INTERFAZ DE JUEGO HUD TÁCTICO ==================== */}
+      {/* ==================== INTERFAZ DE JUEGO HUD TÁCTICO & RESPONSIVE ==================== */}
       {gameState === 'PLAYING' && (
         <>
           {/* BARRA SUPERIOR DE ESTADO & REC */}
           <div style={hudHeader}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-              <span style={recIndicator}>● REC 00:18:32</span>
-              <h2 style={suspectTitleHeader}>SUJETO #409 — "CARTER"</h2>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <span style={recIndicator}>● REC</span>
+              <h2 style={suspectTitleHeader}>SUJETO #409</h2>
             </div>
-            <button style={expedienteBtn} onClick={() => setShowExpediente(true)}>
-              📁 EXPEDIENTE & NOTAS
-            </button>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <div style={mobileNavToggle}>
+                <button style={{ ...mobileNavBtn, background: mobilePanel === 'metrics' ? '#e2a03f' : '#0f172a', color: mobilePanel === 'metrics' ? '#000' : '#e2a03f' }} onClick={() => setMobilePanel('metrics')}>📊</button>
+                <button style={{ ...mobileNavBtn, background: mobilePanel === 'chat' ? '#e2a03f' : '#0f172a', color: mobilePanel === 'chat' ? '#000' : '#e2a03f' }} onClick={() => setMobilePanel('chat')}>💬</button>
+                <button style={{ ...mobileNavBtn, background: mobilePanel === 'notes' ? '#e2a03f' : '#0f172a', color: mobilePanel === 'notes' ? '#000' : '#e2a03f' }} onClick={() => setMobilePanel('notes')}>📝</button>
+              </div>
+              <button style={expedienteBtn} onClick={() => setShowExpediente(true)}>
+                📁 EXPEDIENTE
+              </button>
+            </div>
           </div>
 
           {/* PANEL LATERAL IZQUIERDO: Métricas y Evidencias */}
-          <div style={leftPanel}>
+          <div style={{ ...leftPanel, display: mobilePanel === 'metrics' || window.innerWidth > 900 ? 'flex' : 'none' }}>
             <div style={panelSection}>
               <h4 style={panelTitle}>ESTADO PSICOLÓGICO</h4>
               <div style={{ margin: '10px 0' }}>
-                <div style={{ display: 'flex', justifyContent: 'between', fontSize: '0.75rem', color: '#aaa', marginBottom: '4px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: '#aaa', marginBottom: '4px' }}>
                   <span>NIVEL DE ESTRÉS</span>
                   <span style={{ color: suspectStress > 60 ? '#d93838' : '#e2a03f', fontWeight: 'bold' }}>{suspectStress}%</span>
                 </div>
@@ -379,15 +381,15 @@ export default function App() {
             <div style={panelSection}>
               <h4 style={panelTitle}>EVIDENCIAS CLAVE</h4>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '8px' }}>
-                <div style={evidenceBadge}>📷 Foto Bar Central (22:05)</div>
-                <div style={evidenceBadge}>📄 Recibo de taxi (22:42)</div>
-                <div style={evidenceBadge}>✉️ Mensaje de Laura (Sin leer)</div>
+                <div style={evidenceBadge}>📷 Foto Bar Central</div>
+                <div style={evidenceBadge}>📄 Recibo de taxi</div>
+                <div style={evidenceBadge}>✉️ Mensaje de Laura</div>
               </div>
             </div>
           </div>
 
           {/* PANEL LATERAL DERECHO: Historial de Conversación */}
-          <div style={rightPanel}>
+          <div style={{ ...rightPanel, display: mobilePanel === 'chat' || window.innerWidth > 900 ? 'flex' : 'none' }}>
             <h4 style={panelTitle}>HISTORIAL DE CONVERSACIÓN</h4>
             <div style={historyScrollContainer}>
               {chatHistory.map((msg, index) => (
@@ -398,6 +400,29 @@ export default function App() {
                   <p style={{ margin: '3px 0 0 0', fontSize: '0.78rem', color: '#cbd5e1', lineHeight: '1.35' }}>
                     {msg.text}
                   </p>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* SECCIÓN INFERIOR MÓVIL: Notas */}
+          <div style={{ ...notesMobileContainer, display: mobilePanel === 'notes' && window.innerWidth <= 900 ? 'flex' : 'none' }}>
+            <h4 style={panelTitle}>NOTAS RÁPIDAS</h4>
+            <form onSubmit={handleAddNote} style={{ display: 'flex', gap: '5px', marginBottom: '8px' }}>
+              <input 
+                type="text" 
+                placeholder="Añadir nota rápida..." 
+                value={newNoteText}
+                onChange={(e) => setNewNoteText(e.target.value)}
+                style={noteInputStyle}
+              />
+              <button type="submit" style={addNoteBtn}>+</button>
+            </form>
+            <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              {detectiveNotes.map((note) => (
+                <div key={note.id || Math.random()} style={noteCard}>
+                  <span style={noteCategoryTag}>{note.category}</span>
+                  <p style={{ margin: '2px 0 0 0', color: '#e2e8f0', fontSize: '0.75rem' }}>{note.text}</p>
                 </div>
               ))}
             </div>
@@ -415,12 +440,12 @@ export default function App() {
               type="text" 
               value={userInput} 
               onChange={(e) => setUserInput(e.target.value)}
-              placeholder={isLoading ? "El sospechoso está analizando tu respuesta..." : "Escribe tu pregunta, objeción o acusación..."}
+              placeholder={isLoading ? "Analizando..." : "Escribe tu pregunta u objeción..."}
               disabled={isLoading}
               style={textInputStyle}
             />
             <button type="submit" disabled={isLoading} style={sendBtnStyle}>
-              {isLoading ? "ANALIZANDO..." : "INTERROGAR"}
+              {isLoading ? "..." : "INTERROGAR"}
             </button>
           </form>
         </>
@@ -431,7 +456,7 @@ export default function App() {
         <div style={modalOverlay}>
           <div style={modalContent}>
             <div style={modalHeader}>
-              <h2 style={{ margin: 0, fontSize: '1rem', letterSpacing: '2px', color: '#e2a03f' }}>EXPEDIENTE DEL CASO #409: LA MUERTE DE LAURA DAVIS</h2>
+              <h2 style={{ margin: 0, fontSize: '0.9rem', letterSpacing: '1px', color: '#e2a03f' }}>EXPEDIENTE #409</h2>
               <button style={closeBtn} onClick={() => setShowExpediente(false)}>✕ CERRAR</button>
             </div>
 
@@ -440,61 +465,51 @@ export default function App() {
                 style={{ ...tabBtn, borderBottom: activeTab === 'INFO' ? '2px solid #e2a03f' : '2px solid transparent', color: activeTab === 'INFO' ? '#e2a03f' : '#64748b' }}
                 onClick={() => setActiveTab('INFO')}
               >
-                📋 DATOS Y OBJETIVOS
+                📋 DATOS
               </button>
               <button 
                 style={{ ...tabBtn, borderBottom: activeTab === 'NOTAS' ? '2px solid #e2a03f' : '2px solid transparent', color: activeTab === 'NOTAS' ? '#e2a03f' : '#64748b' }}
                 onClick={() => setActiveTab('NOTAS')}
               >
-                📝 LIBRETA DE NOTAS ({detectiveNotes.length})
+                📝 NOTAS ({detectiveNotes.length})
               </button>
             </div>
 
             <div style={modalBody}>
               {activeTab === 'INFO' ? (
-                <div style={{ display: 'flex', gap: '30px', width: '100%' }}>
-                  <div style={{ flex: 1 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '15px', width: '100%' }}>
+                  <div>
                     <h3 style={modalSubTitle}>INFORMACIÓN GENERAL</h3>
-                    <p style={modalText}><strong>Fecha:</strong> 14 de octubre, 23:47[cite: 1]</p>
-                    <p style={modalText}><strong>Lugar:</strong> Apartamento 7B[cite: 1]</p>
-                    <p style={modalText}><strong>Estado:</strong> Investigación en curso[cite: 1]</p>
+                    <p style={modalText}><strong>Fecha:</strong> 14 de octubre, 23:47</p>
+                    <p style={modalText}><strong>Lugar:</strong> Apartamento 7B</p>
+                    <p style={modalText}><strong>Estado:</strong> Investigación en curso</p>
                     
-                    <h3 style={{ ...modalSubTitle, marginTop: '20px' }}>OBJETIVOS ACTUALES</h3>
-                    <ul style={{ paddingLeft: '18px', color: '#cbd5e1', lineHeight: '1.5', fontSize: '0.85rem' }}>
-                      <li>Descubre qué hizo Carter esa noche[cite: 1].</li>
-                      <li>Averigua su relación con la víctima[cite: 1].</li>
-                      <li>Encuentra contradicciones en su coartada[cite: 1].</li>
+                    <h3 style={{ ...modalSubTitle, marginTop: '15px' }}>OBJETIVOS</h3>
+                    <ul style={{ paddingLeft: '18px', color: '#cbd5e1', lineHeight: '1.4', fontSize: '0.8rem' }}>
+                      <li>Descubre qué hizo Carter esa noche.</li>
+                      <li>Averigua su relación con la víctima.</li>
+                      <li>Encuentra contradicciones en su coartada.</li>
                     </ul>
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <h3 style={modalSubTitle}>DIRECTRICES DE INTERROGATORIO</h3>
-                    <p style={{ fontSize: '0.85rem', color: '#94a3b8', lineHeight: '1.5', fontStyle: 'italic' }}>
-                      "Lo que dice el sospechoso no siempre coincide con su lenguaje corporal o su nivel de estrés[cite: 1]. Mantén la presión sin cruzar la línea o exigirá un abogado."
-                    </p>
                   </div>
                 </div>
               ) : (
-                <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '15px' }}>
-                  <p style={{ fontSize: '0.85rem', color: '#94a3b8', margin: 0 }}>
-                    Anota tus deducciones clave o contradicciones detectadas durante el interrogatorio:
-                  </p>
-                  
-                  <form onSubmit={handleAddNote} style={{ display: 'flex', gap: '10px' }}>
+                <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  <form onSubmit={handleAddNote} style={{ display: 'flex', gap: '8px' }}>
                     <input 
                       type="text" 
-                      placeholder="Escribe una nueva nota de investigación..." 
+                      placeholder="Nueva nota de investigación..." 
                       value={newNoteText}
                       onChange={(e) => setNewNoteText(e.target.value)}
                       style={noteInputStyle}
                     />
-                    <button type="submit" style={addNoteBtn}>AÑADIR NOTA</button>
+                    <button type="submit" style={addNoteBtn}>AÑADIR</button>
                   </form>
 
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '35vh', overflowY: 'auto', paddingRight: '5px' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '35vh', overflowY: 'auto' }}>
                     {detectiveNotes.map((note) => (
-                      <div key={note.id} style={noteCard}>
+                      <div key={note.id || Math.random()} style={noteCard}>
                         <span style={noteCategoryTag}>{note.category}</span>
-                        <p style={{ margin: '4px 0 0 0', color: '#e2e8f0', fontSize: '0.85rem' }}>{note.text}</p>
+                        <p style={{ margin: '4px 0 0 0', color: '#e2e8f0', fontSize: '0.8rem' }}>{note.text}</p>
                       </div>
                     ))}
                   </div>
@@ -508,118 +523,120 @@ export default function App() {
   );
 }
 
-// ==================== ESTILOS TÁCTICOS Y CINEMATOGRÁFICOS ====================
-const topBar = { position: 'absolute', top: 0, left: 0, width: '100%', height: '35px', background: '#000', zIndex: 10 };
-const bottomBar = { position: 'absolute', bottom: 0, left: 0, width: '100%', height: '35px', background: '#000', zIndex: 10 };
+// ==================== ESTILOS ====================
+const topBar = { position: 'absolute', top: 0, left: 0, width: '100%', height: '25px', background: '#000', zIndex: 10 };
+const bottomBar = { position: 'absolute', bottom: 0, left: 0, width: '100%', height: '25px', background: '#000', zIndex: 10 };
 
-// MENÚ ESTILOS
 const menuOverlay = {
   position: 'absolute', top: 0, left: 0, width: '100%', height: '100%',
-  display: 'flex', alignItems: 'center', justifyContent: 'flex-start',
-  paddingLeft: '10%', background: 'radial-gradient(circle at center, rgba(15,23,42,0.85) 0%, rgba(2,2,3,0.95) 100%)',
-  zIndex: 20, fontFamily: 'monospace'
+  display: 'flex', alignItems: 'center', justifyContent: 'center',
+  padding: '20px', background: 'radial-gradient(circle at center, rgba(15,23,42,0.9) 0%, rgba(2,2,3,0.98) 100%)',
+  zIndex: 20, fontFamily: 'monospace', textAlign: 'center'
 };
 
-const menuContent = { maxWidth: '520px', color: '#fff' };
-const subtitleTag = { color: '#e2a03f', fontSize: '0.75rem', letterSpacing: '4px', fontWeight: 'bold' };
-const gameTitle = { fontSize: '3.2rem', margin: '12px 0', letterSpacing: '6px', textTransform: 'uppercase', lineHeight: '1', color: '#f8fafc' };
-const gameDesc = { color: '#94a3b8', fontSize: '0.9rem', lineHeight: '1.6', marginBottom: '35px', fontFamily: 'sans-serif' };
+const menuContent = { maxWidth: '480px', color: '#fff' };
+const subtitleTag = { color: '#e2a03f', fontSize: '0.7rem', letterSpacing: '3px', fontWeight: 'bold' };
+const gameTitle = { fontSize: 'clamp(2rem, 5vw, 3.2rem)', margin: '10px 0', letterSpacing: '4px', textTransform: 'uppercase', lineHeight: '1', color: '#f8fafc' };
+const gameDesc = { color: '#94a3b8', fontSize: '0.85rem', lineHeight: '1.5', marginBottom: '25px', fontFamily: 'sans-serif' };
 
 const btnGroup = { display: 'flex', flexDirection: 'column', gap: '12px' };
 const startBtn = {
-  background: '#e2a03f', border: 'none', color: '#000', padding: '16px 28px',
-  fontWeight: 'bold', fontSize: '0.85rem', letterSpacing: '3px', cursor: 'pointer',
-  transition: 'all 0.2s ease', boxShadow: '0 4px 20px rgba(226, 160, 63, 0.3)'
+  background: '#e2a03f', border: 'none', color: '#000', padding: '14px 24px',
+  fontWeight: 'bold', fontSize: '0.8rem', letterSpacing: '2px', cursor: 'pointer',
+  boxShadow: '0 4px 20px rgba(226, 160, 63, 0.3)', width: '100%'
 };
 
-// HUD DE JUEGO (PANELES ESPACIADOS Y ORDENADOS)
 const hudHeader = {
-  position: 'absolute', top: '50px', left: '30px', right: '30px', height: '50px',
+  position: 'absolute', top: '35px', left: '15px', right: '15px', height: '45px',
   display: 'flex', justifyContent: 'space-between', alignItems: 'center', zIndex: 20, fontFamily: 'monospace'
 };
 
-const recIndicator = { color: '#ef4444', fontSize: '0.75rem', letterSpacing: '2px', fontWeight: 'bold', background: 'rgba(239, 68, 68, 0.1)', padding: '4px 10px', borderRadius: '4px', border: '1px solid rgba(239, 68, 68, 0.3)' };
-const suspectTitleHeader = { margin: 0, fontSize: '1rem', letterSpacing: '3px', color: '#f1f5f9' };
+const recIndicator = { color: '#ef4444', fontSize: '0.7rem', letterSpacing: '1px', fontWeight: 'bold', background: 'rgba(239, 68, 68, 0.1)', padding: '3px 8px', borderRadius: '4px', border: '1px solid rgba(239, 68, 68, 0.3)' };
+const suspectTitleHeader = { margin: 0, fontSize: '0.85rem', letterSpacing: '2px', color: '#f1f5f9' };
+
+const mobileNavToggle = { display: window.innerWidth <= 900 ? 'flex' : 'none', gap: '4px' };
+const mobileNavBtn = { border: '1px solid #334155', padding: '6px 10px', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem' };
 
 const expedienteBtn = {
   background: 'rgba(15, 23, 42, 0.9)', border: '1px solid #e2a03f', color: '#e2a03f',
-  padding: '8px 16px', cursor: 'pointer', fontSize: '0.75rem', fontFamily: 'monospace', letterSpacing: '1px',
-  borderRadius: '4px', backdropFilter: 'blur(4px)', transition: 'background 0.2s'
+  padding: '6px 12px', cursor: 'pointer', fontSize: '0.7rem', fontFamily: 'monospace',
+  borderRadius: '4px', backdropFilter: 'blur(4px)'
 };
 
-// PANEL IZQUIERDO (Métricas y Evidencias)
 const leftPanel = {
-  position: 'absolute', top: '115px', left: '30px', width: '260px', bottom: '130px',
-  backgroundColor: 'rgba(10, 14, 23, 0.75)', border: '1px solid rgba(51, 65, 85, 0.6)', padding: '16px',
+  position: 'absolute', top: '90px', left: '15px', width: '250px', maxHeight: 'calc(100vh - 200px)',
+  backgroundColor: 'rgba(10, 14, 23, 0.85)', border: '1px solid rgba(51, 65, 85, 0.6)', padding: '12px',
   zIndex: 20, fontFamily: 'monospace', color: '#cbd5e1', backdropFilter: 'blur(6px)', borderRadius: '6px',
-  display: 'flex', flexDirection: 'column', gap: '20px', boxShadow: '0 8px 32px rgba(0,0,0,0.5)'
+  flexDirection: 'column', gap: '15px', boxShadow: '0 8px 32px rgba(0,0,0,0.5)'
 };
 
 const panelSection = { display: 'flex', flexDirection: 'column' };
-const panelTitle = { fontSize: '0.7rem', color: '#e2a03f', letterSpacing: '2px', margin: '0 0 10px 0', borderBottom: '1px solid rgba(51, 65, 85, 0.4)', paddingBottom: '4px' };
+const panelTitle = { fontSize: '0.65rem', color: '#e2a03f', letterSpacing: '2px', margin: '0 0 8px 0', borderBottom: '1px solid rgba(51, 65, 85, 0.4)', paddingBottom: '3px' };
 const stressBarBackground = { width: '100%', height: '5px', background: '#1e293b', borderRadius: '3px', overflow: 'hidden' };
 const stressBarFill = { height: '100%', transition: 'width 0.4s ease, background 0.4s ease' };
-const evidenceBadge = { backgroundColor: 'rgba(30, 41, 59, 0.6)', border: '1px solid rgba(51, 65, 85, 0.8)', padding: '8px 10px', borderRadius: '4px', fontSize: '0.75rem', color: '#e2e8f0' };
+const evidenceBadge = { backgroundColor: 'rgba(30, 41, 59, 0.6)', border: '1px solid rgba(51, 65, 85, 0.8)', padding: '6px 8px', borderRadius: '4px', fontSize: '0.7rem', color: '#e2e8f0' };
 
-// PANEL DERECHO (Historial de Conversación)
 const rightPanel = {
-  position: 'absolute', top: '115px', right: '30px', width: '280px', bottom: '130px',
-  backgroundColor: 'rgba(10, 14, 23, 0.75)', border: '1px solid rgba(51, 65, 85, 0.6)', padding: '16px',
+  position: 'absolute', top: '90px', right: '15px', width: '270px', maxHeight: 'calc(100vh - 200px)',
+  backgroundColor: 'rgba(10, 14, 23, 0.85)', border: '1px solid rgba(51, 65, 85, 0.6)', padding: '12px',
   zIndex: 20, fontFamily: 'monospace', color: '#cbd5e1', backdropFilter: 'blur(6px)', borderRadius: '6px',
-  display: 'flex', flexDirection: 'column', boxShadow: '0 8px 32px rgba(0,0,0,0.5)'
+  flexDirection: 'column', boxShadow: '0 8px 32px rgba(0,0,0,0.5)'
 };
 
-const historyScrollContainer = { flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px', paddingRight: '4px', marginTop: '8px' };
-const historyItem = { backgroundColor: 'rgba(15, 23, 42, 0.6)', border: '1px solid rgba(30, 41, 59, 0.8)', padding: '8px 10px', borderRadius: '4px' };
+const historyScrollContainer = { flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px', paddingRight: '4px', marginTop: '6px', maxHeight: '250px' };
+const historyItem = { backgroundColor: 'rgba(15, 23, 42, 0.6)', border: '1px solid rgba(30, 41, 59, 0.8)', padding: '6px 8px', borderRadius: '4px' };
 
-// CAJA DE DIÁLOGO Y BARRA DE CHAT INFERIOR
+const notesMobileContainer = {
+  position: 'absolute', top: '90px', left: '15px', right: '15px', maxHeight: 'calc(100vh - 200px)',
+  backgroundColor: 'rgba(10, 14, 23, 0.95)', border: '1px solid rgba(51, 65, 85, 0.8)', padding: '12px',
+  zIndex: 20, fontFamily: 'monospace', color: '#cbd5e1', borderRadius: '6px', flexDirection: 'column', gap: '8px'
+};
+
 const dialogueBox = {
-  position: 'absolute', bottom: '90px', left: '315px', right: '325px',
-  backgroundColor: 'rgba(10, 14, 23, 0.9)', borderLeft: '3px solid #e2a03f', borderTop: '1px solid rgba(51,65,85,0.6)',
-  borderRight: '1px solid rgba(51,65,85,0.6)', borderBottom: '1px solid rgba(51,65,85,0.6)',
-  padding: '12px 20px', backdropFilter: 'blur(6px)', zIndex: 20, fontFamily: 'sans-serif', borderRadius: '0 6px 6px 0'
+  position: 'absolute', bottom: '80px', left: '15px', right: '15px', maxWidth: '700px', margin: '0 auto',
+  backgroundColor: 'rgba(10, 14, 23, 0.92)', borderLeft: '3px solid #e2a03f', border: '1px solid rgba(51,65,85,0.6)',
+  padding: '10px 15px', backdropFilter: 'blur(6px)', zIndex: 20, fontFamily: 'sans-serif', borderRadius: '6px'
 };
 
-const characterNameTag = { margin: 0, fontSize: '0.65rem', color: '#e2a03f', letterSpacing: '2px', fontWeight: 'bold', fontFamily: 'monospace' };
-const dialogueContent = { margin: '6px 0 0 0', fontSize: '0.98rem', color: '#f1f5f9', lineHeight: '1.4', fontStyle: 'italic' };
+const characterNameTag = { margin: 0, fontSize: '0.6rem', color: '#e2a03f', letterSpacing: '2px', fontWeight: 'bold', fontFamily: 'monospace' };
+const dialogueContent = { margin: '4px 0 0 0', fontSize: '0.9rem', color: '#f1f5f9', lineHeight: '1.3', fontStyle: 'italic' };
 
 const chatBarContainer = {
-  position: 'absolute', bottom: '45px', left: '315px', right: '325px',
-  display: 'flex', gap: '10px', zIndex: 20
+  position: 'absolute', bottom: '35px', left: '15px', right: '15px', maxWidth: '700px', margin: '0 auto',
+  display: 'flex', gap: '8px', zIndex: 20
 };
 
 const textInputStyle = {
   flex: 1, background: 'rgba(15, 23, 42, 0.9)', border: '1px solid rgba(51, 65, 85, 0.8)', color: '#fff',
-  padding: '12px 16px', fontSize: '0.85rem', fontFamily: 'sans-serif', borderRadius: '4px', outline: 'none'
+  padding: '10px 12px', fontSize: '0.8rem', fontFamily: 'sans-serif', borderRadius: '4px', outline: 'none'
 };
 
 const sendBtnStyle = {
-  background: '#e2a03f', border: 'none', color: '#000', padding: '0 22px',
-  fontWeight: 'bold', fontSize: '0.75rem', letterSpacing: '2px', cursor: 'pointer', borderRadius: '4px', fontFamily: 'monospace'
+  background: '#e2a03f', border: 'none', color: '#000', padding: '0 16px',
+  fontWeight: 'bold', fontSize: '0.7rem', letterSpacing: '1px', cursor: 'pointer', borderRadius: '4px', fontFamily: 'monospace'
 };
 
-// ESTILOS DEL MODAL DE EXPEDIENTE Y NOTAS
 const modalOverlay = {
   position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh',
   backgroundColor: 'rgba(2, 2, 3, 0.85)', backdropFilter: 'blur(8px)',
   display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 100,
-  fontFamily: 'sans-serif'
+  fontFamily: 'sans-serif', padding: '15px'
 };
 
 const modalContent = {
-  width: '75%', maxWidth: '850px', backgroundColor: '#0a0e17',
+  width: '100%', maxWidth: '700px', backgroundColor: '#0a0e17',
   border: '1px solid rgba(51, 65, 85, 0.8)', borderRadius: '8px', overflow: 'hidden', color: '#e2e8f0',
   boxShadow: '0 20px 50px rgba(0,0,0,0.9)'
 };
 
 const modalHeader = {
   display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-  padding: '18px 25px', backgroundColor: '#0f172a', borderBottom: '1px solid rgba(51, 65, 85, 0.6)'
+  padding: '14px 20px', backgroundColor: '#0f172a', borderBottom: '1px solid rgba(51, 65, 85, 0.6)'
 };
 
 const closeBtn = {
   background: 'transparent', border: '1px solid #475569', color: '#cbd5e1',
-  padding: '6px 12px', cursor: 'pointer', fontSize: '0.7rem', fontFamily: 'monospace', borderRadius: '4px'
+  padding: '4px 10px', cursor: 'pointer', fontSize: '0.65rem', fontFamily: 'monospace', borderRadius: '4px'
 };
 
 const tabContainer = {
@@ -627,33 +644,32 @@ const tabContainer = {
 };
 
 const tabBtn = {
-  flex: 1, padding: '12px', background: 'transparent', border: 'none',
-  cursor: 'pointer', fontSize: '0.75rem', fontFamily: 'monospace', fontWeight: 'bold', letterSpacing: '1px'
+  flex: 1, padding: '10px', background: 'transparent', border: 'none',
+  cursor: 'pointer', fontSize: '0.7rem', fontFamily: 'monospace', fontWeight: 'bold', letterSpacing: '1px'
 };
 
 const modalBody = {
-  display: 'flex', padding: '25px', minHeight: '300px', maxHeight: '60vh', overflowY: 'auto'
+  display: 'flex', padding: '20px', minHeight: '220px', maxHeight: '55vh', overflowY: 'auto'
 };
 
-const modalColumn = { flex: 1 };
-const modalSubTitle = { fontSize: '0.75rem', color: '#e2a03f', letterSpacing: '2px', margin: '0 0 10px 0' };
-const modalText = { fontSize: '0.85rem', color: '#94a3b8', margin: '6px 0' };
+const modalSubTitle = { fontSize: '0.7rem', color: '#e2a03f', letterSpacing: '1px', margin: '0 0 8px 0' };
+const modalText = { fontSize: '0.8rem', color: '#94a3b8', margin: '4px 0' };
 
 const noteInputStyle = {
   flex: 1, background: '#0f172a', border: '1px solid rgba(51, 65, 85, 0.8)', color: '#fff',
-  padding: '10px 14px', borderRadius: '4px', fontSize: '0.85rem', outline: 'none'
+  padding: '8px 12px', borderRadius: '4px', fontSize: '0.8rem', outline: 'none'
 };
 
 const addNoteBtn = {
-  background: '#e2a03f', border: 'none', color: '#000', padding: '0 16px',
-  fontWeight: 'bold', fontSize: '0.7rem', cursor: 'pointer', borderRadius: '4px', fontFamily: 'monospace', letterSpacing: '1px'
+  background: '#e2a03f', border: 'none', color: '#000', padding: '0 12px',
+  fontWeight: 'bold', fontSize: '0.65rem', cursor: 'pointer', borderRadius: '4px', fontFamily: 'monospace'
 };
 
 const noteCard = {
-  backgroundColor: '#0f172a', border: '1px solid rgba(51, 65, 85, 0.6)', padding: '12px',
-  borderRadius: '4px', display: 'flex', flexDirection: 'column', gap: '4px'
+  backgroundColor: '#0f172a', border: '1px solid rgba(51, 65, 85, 0.6)', padding: '10px',
+  borderRadius: '4px', display: 'flex', flexDirection: 'column', gap: '3px'
 };
 
 const noteCategoryTag = {
-  fontSize: '0.6rem', color: '#e2a03f', fontFamily: 'monospace', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: '1px'
+  fontSize: '0.55rem', color: '#e2a03f', fontFamily: 'monospace', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: '1px'
 };
