@@ -245,7 +245,7 @@ export default function App() {
     if (!newNoteText.trim()) return;
 
     try {
-      const response = await fetch("http://localhost:3001/api/notes", {
+      const response = await fetch("https://thelastquestion-production.up.railway.app/api/notes", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: newNoteText, category: "Observación Personal" })
@@ -290,7 +290,7 @@ export default function App() {
       }));
 
       // 3. Enviar la data al backend
-      const response = await fetch("http://localhost:3001/api/interact", {
+      const response = await fetch("https://thelastquestion-production.up.railway.app/api/interact", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
