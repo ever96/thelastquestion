@@ -7,6 +7,14 @@ import { createClient } from '@supabase/supabase-js';
 // Cargar variables de entorno (para desarrollo local, en Railway lee del panel)
 dotenv.config();
 
+// Verificar variables de entorno antes de arrancar
+const requiredEnv = ['GROQ_API_KEY', 'SUPABASE_URL', 'SUPABASE_KEY'];
+const missingEnv = requiredEnv.filter((name) => !process.env[name]);
+if (missingEnv.length > 0) {
+  console.error(`Faltan variables de entorno: ${missingEnv.join(', ')}`);
+  process.exit(1);
+}
+
 const app = express();
 const port = process.env.PORT || 3001;
 
@@ -24,12 +32,17 @@ app.use(cors({
 // Middleware para parsear JSON
 app.use(express.json());
 
+// Ruta de prueba para comprobar que el servidor responde
+app.get('/', (req, res) => {
+  res.send('Backend OK');
+});
+
 // ==========================================
 // ENDPOINT: Chat con Groq (El Interrogatorio)
 // ==========================================
 app.post('/api/interact', async (req, res) => {
   try {
-    const { currentQuestion, chatHistory, secretA, secretB } = req.body;
+    const { currentQuestion, chatHistory = [], secretA, secretB } = req.body;
 
     // Prompt de sistema para obligar a Groq a actuar como Carter y devolver formato JSON
     const systemPrompt = `
@@ -48,17 +61,17 @@ app.post('/api/interact', async (req, res) => {
 
     // Preparar el historial de mensajes para enviarlo a la API de Groq
     const messages = [
-      { role: "system", content: systemPrompt },
+      { role: 'system', content: systemPrompt },
       ...chatHistory,
-      { role: "user", content: currentQuestion }
+      { role: 'user', content: currentQuestion }
     ];
 
-    // Llamada a Groq (Usando llama3-8b-8192 o el modelo que prefieras)
+    // Llamada a Groq. Si el modelo ya no está disponible, cámbialo aquí.
     const chatCompletion = await groq.chat.completions.create({
       messages: messages,
-      model: "llama3-8b-8192",
+      model: 'llama-3.1-8b-instant',
       temperature: 0.7,
-      response_format: { type: "json_object" } // Fuerza la salida JSON
+      response_format: { type: 'json_object' } // Fuerza la salida JSON
     });
 
     // Parsear la respuesta y enviarla al frontend
@@ -66,8 +79,8 @@ app.post('/api/interact', async (req, res) => {
     res.json(responseContent);
 
   } catch (error) {
-    console.error("Error en Groq:", error);
-    res.status(500).json({ error: "Error interno del servidor al contactar con la IA." });
+    console.error('Error en Groq:', error);
+    res.status(500).json({ error: 'Error interno del servidor al contactar con la IA.' });
   }
 });
 
@@ -78,8 +91,7 @@ app.post('/api/notes', async (req, res) => {
   try {
     const { text, category } = req.body;
 
-    // Opcional: Si tienes una tabla 'notes' en Supabase, la inserta aquí
-    // Si no tienes la tabla creada, esto fallará y usará el fallback local del frontend
+    // Si no tienes la tabla 'notes' creada en Supabase, esto fallará y usará el fallback local
     const { data, error } = await supabase
       .from('notes')
       .insert([{ text, category }])
@@ -89,13 +101,13 @@ app.post('/api/notes', async (req, res) => {
 
     res.json(data[0]);
   } catch (error) {
-    console.warn("No se pudo guardar en Supabase. Devolviendo nota local. Error:", error.message);
+    console.warn('No se pudo guardar en Supabase. Devolviendo nota local. Error:', error.message);
     // Fallback: devuelve la nota con un ID temporal si la BD falla
     res.json({ id: Date.now(), text: req.body.text, category: req.body.category });
   }
 });
 
-// Iniciar servidor
-app.listen(port, () => {
+// Iniciar servidor (escucha en todas las interfaces, necesario en Railway)
+app.listen(port, '0.0.0.0', () => {
   console.log(`Servidor backend corriendo en el puerto ${port}`);
 });

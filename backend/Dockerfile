@@ -1,8 +1,7 @@
-FROM node:18-alpine
+FROM node:22-alpine
 
 WORKDIR /app
 
-# Copia package.json desde el contexto actual
 COPY package*.json ./
 
 RUN npm install --omit=dev
