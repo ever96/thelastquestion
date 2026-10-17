@@ -9,7 +9,7 @@ export default function App() {
   const [gameState, setGameState] = useState('MENU'); // 'MENU' | 'PLAYING'
   const [suspectStress, setSuspectStress] = useState(20);
   const [dialogueText, setDialogueText] = useState("No tengo nada que decirte, detective. Estás perdiendo el tiempo.");
-  const [suspectStatus, setSuspectStatus] = useState("Calmado");
+  const [suspectStatus, setSuspectStatus] = useState("CALMADO");
   const [userInput, setUserInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [showExpediente, setShowExpediente] = useState(false);
@@ -17,6 +17,10 @@ export default function App() {
   
   // Estado para versión móvil (alternar paneles inferiores/laterales)
   const [mobilePanel, setMobilePanel] = useState('chat'); // 'chat' | 'metrics' | 'notes'
+
+  // NUEVO: Estados para rastrear el progreso del interrogatorio (Secretos de Carter)
+  const [secretA, setSecretA] = useState("DESCONOCIDO");
+  const [secretB, setSecretB] = useState("DESCONOCIDO");
 
   // Historial de conversación táctico
   const [chatHistory, setChatHistory] = useState([
@@ -275,37 +279,65 @@ export default function App() {
       targetCamPos.current = camPositions.PLAYING;
     }, 3500);
 
+    // 1. Guardar la pregunta del usuario en el historial visual
     setChatHistory(prev => [...prev, { sender: 'TÚ', text: currentQuestion }]);
 
     try {
+      // 2. Mapear el historial visual al formato que entiende el Backend/LLM
+      const apiHistory = chatHistory.map(msg => ({
+        role: msg.sender === 'TÚ' ? 'user' : 'assistant',
+        content: msg.text
+      }));
+
+      // 3. Enviar la data al backend
       const response = await fetch("http://localhost:3001/api/interact", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           currentQuestion,
-          suspectStress
+          chatHistory: apiHistory, // Enviamos el historial
+          secretA,                 // Estado actual del Secreto A
+          secretB                  // Estado actual del Secreto B
         })
       });
 
       const result = await response.json();
 
-      setDialogueText(result.dialogue);
-      setSuspectStatus(result.status);
-      setSuspectStress((prev) => Math.max(0, Math.min(100, prev + result.stressDelta)));
+      // 4. Actualizar la interfaz con la respuesta y estados del sistema
+      setDialogueText(result.dialogo);
       
+      if (result.disposicion) {
+        setSuspectStatus(result.disposicion.toUpperCase());
+        // Calcular estrés basado en la disposición
+        let newStress = suspectStress;
+        switch(result.disposicion.toLowerCase()) {
+          case 'calmado': newStress = 20; break;
+          case 'nervioso': newStress = 50; break;
+          case 'irritado': newStress = 75; break;
+          case 'hostil': newStress = 90; break;
+          case 'cerrado': newStress = 100; break;
+          default: newStress = 50;
+        }
+        setSuspectStress(newStress);
+      }
+
+      if (result.estado_secreto_A) setSecretA(result.estado_secreto_A);
+      if (result.estado_secreto_B) setSecretB(result.estado_secreto_B);
+
+      // Si el backend devuelve un cambio de modelo (opcional/fallback)
       if (result.modelToUse && (result.modelToUse === 'sentado' || result.modelToUse === 'detective')) {
         switchActiveModel(result.modelToUse);
       }
 
-      setChatHistory(prev => [...prev, { sender: 'CARTER', text: result.dialogue }]);
+      // 5. Actualizar el historial visual con la respuesta de Carter
+      setChatHistory(prev => [...prev, { sender: 'CARTER', text: result.dialogo }]);
 
     } catch (error) {
       console.error("Error al conectar con el backend:", error);
-      const fallbackText = "... (El sospechoso guarda silencio absoluto y te mira con desprecio).";
+      const fallbackText = "... (El sospechoso guarda silencio absoluto y te ignora).";
       setDialogueText(fallbackText);
-      setSuspectStatus("Evasivo");
+      setSuspectStatus("CERRADO");
+      setSuspectStress(100);
       setChatHistory(prev => [...prev, { sender: 'CARTER', text: fallbackText }]);
     } finally {
       setIsLoading(false);
@@ -375,6 +407,30 @@ export default function App() {
                 <span style={{ fontSize: '0.7rem', color: '#888', fontStyle: 'italic', display: 'block', marginTop: '4px' }}>
                   Estado: [{suspectStatus}]
                 </span>
+
+                {/* NUEVO: ESTADO DE LOS SECRETOS DE CARTER */}
+                <div style={{ marginTop: '20px', padding: '10px', backgroundColor: 'rgba(15, 23, 42, 0.6)', borderRadius: '4px', border: '1px solid rgba(51, 65, 85, 0.4)' }}>
+                  <h4 style={{ ...panelTitle, borderBottom: 'none', marginBottom: '8px' }}>PROGRESO INVESTIGACIÓN</h4>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', marginBottom: '6px' }}>
+                    <span style={{ color: '#94a3b8' }}>OBSESIÓN (SEC. A)</span>
+                    <span style={{ 
+                      color: secretA === 'CONFESADO' ? '#ef4444' : (secretA === 'CONFIRMADO' ? '#e2a03f' : '#64748b'),
+                      fontWeight: 'bold' 
+                    }}>
+                      {secretA}
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem' }}>
+                    <span style={{ color: '#94a3b8' }}>TRÁFICO (SEC. B)</span>
+                    <span style={{ 
+                      color: secretB === 'CONFESADO' ? '#ef4444' : (secretB === 'CONFIRMADO' ? '#e2a03f' : '#64748b'),
+                      fontWeight: 'bold' 
+                    }}>
+                      {secretB}
+                    </span>
+                  </div>
+                </div>
+
               </div>
             </div>
 
