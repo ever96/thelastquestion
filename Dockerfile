@@ -2,14 +2,12 @@ FROM node:18-alpine
 
 WORKDIR /app
 
-# Copia los archivos de dependencias
-COPY backend/package*.json ./
+# Copia package.json desde el contexto actual
+COPY package*.json ./
 
-# Instala las dependencias
 RUN npm install --omit=dev
 
-# Copia el resto del código del backend
-COPY backend/ .
+COPY . .
 
 EXPOSE 3000
 
