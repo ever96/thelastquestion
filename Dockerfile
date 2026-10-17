@@ -1,22 +1,16 @@
-# Usar una imagen oficial y ligera de Node.js
 FROM node:18-alpine
 
-# Establecer el directorio de trabajo principal dentro del contenedor
 WORKDIR /app
 
-# Copiar exclusivamente los archivos de dependencias del backend
-COPY backend/package*.json ./backend/
+# Copia los archivos de dependencias
+COPY backend/package*.json ./
 
-# Entrar a la carpeta backend e instalar únicamente las dependencias de producción
-WORKDIR /app/backend
-RUN npm install --production
+# Instala las dependencias
+RUN npm install --omit=dev
 
-# Copiar el resto del código fuente del backend
+# Copia el resto del código del backend
 COPY backend/ .
 
-# Cloud Run inyecta la variable PORT automáticamente (por defecto usa 8080)
-ENV PORT=8080
-EXPOSE 8080
+EXPOSE 3000
 
-# Comando para iniciar el servidor de Node.js
-CMD ["node", "server.js"]
+CMD ["npm", "start"]
