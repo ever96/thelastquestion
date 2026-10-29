@@ -29,12 +29,20 @@ app.set('trust proxy', 1); // Railway está detrás de un proxy: necesario para 
 // ---------- CORS ----------
 // En Railway define ALLOWED_ORIGINS, por ejemplo:
 //   ALLOWED_ORIGINS=https://tu-juego.vercel.app,http://localhost:5173
-const allowed = (process.env.ALLOWED_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean);
+const allowed = (process.env.ALLOWED_ORIGINS || '').split(',').map((s) => s.trim().replace(/\/$/, '')).filter(Boolean);
 if (allowed.length === 0) {
   console.warn('⚠ ALLOWED_ORIGINS no está definido: se aceptan peticiones de cualquier origen.');
 }
+// localhost siempre está permitido para poder desarrollar contra el backend de Railway
+const esLocal = (origin) => /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
 app.use(cors({
-  origin: allowed.length ? allowed : '*',
+  origin: (origin, callback) => {
+    if (!origin || allowed.length === 0 || esLocal(origin) || allowed.includes(origin.replace(/\/$/, ''))) {
+      return callback(null, true);
+    }
+    console.warn(`CORS bloqueado para el origen: ${origin}`);
+    callback(null, false);
+  },
   methods: ['GET', 'POST'],
   allowedHeaders: ['Content-Type'],
 }));
