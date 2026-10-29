@@ -1,0 +1,14 @@
+FOTOS DE LAS EVIDENCIAS
+=======================
+
+Guarda aquí las imágenes con EXACTAMENTE estos nombres:
+
+  foto_bar.jpg        -> Foto de la cámara del callejón del Bar Central (22:08)
+  recibo_taxi.jpg     -> Recibo de taxi (22:34, Bar Central -> Calle Ribera 1200)
+  mensaje_laura.jpg   -> Captura del SMS de Laura a Carter (21:42)
+
+Mientras no existan, el juego muestra una tarjeta provisional.
+Formato recomendado: JPG horizontal 4:3 (por ejemplo 1200x900), menos de 300 KB.
+
+Si prefieres otro nombre o formato (.png, .webp), cambia la ruta "imagen"
+en src/game/caso.js.
