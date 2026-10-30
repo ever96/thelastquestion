@@ -17,7 +17,8 @@ if (missingEnv.length > 0) {
 }
 
 const MODELO = process.env.GROQ_MODEL || 'openai/gpt-oss-20b';
-const port = process.env.PORT || 3000;
+// Railway inyecta PORT; si no lo hace, 8080 coincide con el puerto del dominio público
+const port = Number(process.env.PORT) || 8080;
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 const supabase = process.env.SUPABASE_URL && process.env.SUPABASE_KEY
   ? createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY)
@@ -226,6 +227,13 @@ app.post('/api/notes', limitador({ ventanaMs: 60_000, maximo: 15 }), async (req,
   }
 });
 
-app.listen(port, '0.0.0.0', () => {
+console.log(`Arrancando… PORT=${process.env.PORT ?? '(no definido)'} · NODE ${process.version}`);
+const servidor = app.listen(port, '0.0.0.0', () => {
   console.log(`Servidor backend en el puerto ${port} · modelo ${MODELO}`);
 });
+servidor.on('error', (err) => {
+  console.error('No se pudo abrir el puerto:', err.message);
+  process.exit(1);
+});
+process.on('unhandledRejection', (e) => console.error('Promesa rechazada sin manejar:', e));
+process.on('uncaughtException', (e) => { console.error('Error no capturado:', e); process.exit(1); });

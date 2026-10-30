@@ -6,6 +6,9 @@ backend/node_modules/
 .env
 *.env
 backend/.env
+.env.local
+.env.*.local
+.vercel
 
 # Builds y artefactos
 dist/

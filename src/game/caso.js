@@ -1,7 +1,9 @@
 // Datos PÚBLICOS del caso (lo que el detective sabe al empezar).
 // La verdad completa está en backend/caso.js.
 
-export const API_URL = (import.meta.env.VITE_API_URL || 'https://thelastquestion-production.up.railway.app').replace(/\/$/, '');
+// Vacío = mismo dominio: Vercel (vercel.json) y Vite (vite.config.js) reenvían /api a Railway.
+// Así el navegador nunca hace peticiones a otro dominio y no hay problemas de CORS.
+export const API_URL = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
 
 // Tiempo de juego: el abogado llega a las 02:40. Cada acción consume minutos.
 export const TIEMPO = {
