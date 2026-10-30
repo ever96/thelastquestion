@@ -53,6 +53,8 @@ export default function Expediente({ notas, onAgregarNota, onCerrar }) {
               <p>{e.sospechoso}</p>
               <p><strong>Antecedentes:</strong> {e.antecedentes}</p>
               <p><strong>Coartada:</strong> {e.coartada}</p>
+              <h3>DATOS VERIFICADOS</h3>
+              <ul>{e.datos.map((d) => <li key={d}>{d}</li>)}</ul>
               <h3>OBJETIVOS</h3>
               <ul>{e.objetivos.map((o) => <li key={o}>{o}</li>)}</ul>
               <h3>CÓMO JUGAR</h3>

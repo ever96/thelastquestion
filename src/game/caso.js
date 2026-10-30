@@ -50,7 +50,12 @@ export const EXPEDIENTE = {
   causa: 'Traumatismo craneal contra mesa de vidrio. Signos de forcejeo. Cerradura sin forzar. Celular desaparecido.',
   sospechoso: 'Elías Carter, 41 años, encargado nocturno del Bar Central',
   antecedentes: 'Denuncia por acoso (2021), retirada por la denunciante.',
-  coartada: '"Estuve en mi casa solo desde las 21:00, mirando fútbol."',
+  coartada: '"Estuve en mi casa solo desde las 21:00, mirando el partido Cerro–Olimpia."',
+  datos: [
+    'El partido Cerro–Olimpia de esa noche se suspendió por tormenta a las 21:35.',
+    'El teléfono de Carter no registra actividad entre las 21:45 y las 00:30.',
+    'Ramiro (mozo del Bar Central) recibió la caja de manos de Carter a las 21:05.',
+  ],
   objetivos: [
     'Rompe la coartada de Carter con las pruebas.',
     'Descubre su verdadera relación con Laura (Secreto A).',
@@ -64,7 +69,7 @@ export const NOTAS_INICIALES = [
   { id: 2, text: 'Evita el contacto visual cuando se menciona el Bar Central.', category: 'Comportamiento' },
 ];
 
-export const PRIMERA_LINEA = 'No tengo nada que decirte, detective. Estás perdiendo el tiempo.';
+export const PRIMERA_LINEA = 'En mi casa, detective. Mirando el partido con una cerveza. ¿Eso es todo? Porque tengo un bar que abrir mañana.';
 
 export const formatoHora = (min) => {
   const h = Math.floor(min / 60) % 24;

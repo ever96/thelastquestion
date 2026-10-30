@@ -4,12 +4,15 @@ import { BIBLIA_DEL_CASO, EVIDENCIAS, FINAL_VICTORIA } from './caso.js';
 import { sanearEstado, aplicarTurno, limitesParaIA, IDS_EVIDENCIA, DISPOSICIONES, GESTOS } from './reglas.js';
 
 const MAX_PREGUNTA = 400;
-const MAX_HISTORIAL = 16;
+const MAX_HISTORIAL = 10; // menos historial = menos tokens por pregunta
 
-const modelo = () => process.env.GROQ_MODEL || 'openai/gpt-oss-20b';
+const modelo = () => process.env.GROQ_MODEL || 'openai/gpt-oss-120b'; // 120B sigue mucho mejor las reglas del personaje
+// Si el modelo principal llega a su límite por minuto, se usa este (tiene su propio límite)
+const modeloRespaldo = () => process.env.GROQ_MODEL_RESPALDO || 'openai/gpt-oss-20b';
+const esperar = (ms) => new Promise((r) => setTimeout(r, ms));
 const groqURL = () => (process.env.GROQ_BASE_URL || 'https://api.groq.com/openai/v1') + '/chat/completions';
 
-function construirPromptSistema(estado, evidenciaNueva) {
+function construirPromptSistema(estado, evidenciaNueva, pregunta = '') {
   const vistas = estado.evidencias.map((id) => `- ${EVIDENCIAS[id].nombre}`).join('\n') || '- (ninguna todavía)';
   const nueva = evidenciaNueva
     ? `\n>>> EN ESTE TURNO EL DETECTIVE TE PONE DELANTE: ${EVIDENCIAS[evidenciaNueva].nombre}.\n${EVIDENCIAS[evidenciaNueva].contenido}\nReacciona a esta prueba concreta.\n`
@@ -23,12 +26,12 @@ Pruebas que el detective ya te mostró:
 ${vistas}
 ${nueva}
 === LÍMITES DE ESTE TURNO (obligatorios) ===
-${limitesParaIA(estado, evidenciaNueva)}
+${limitesParaIA(estado, evidenciaNueva, pregunta)}
 
 === FORMATO DE RESPUESTA ===
 Responde ÚNICAMENTE con un objeto JSON válido, sin texto antes ni después:
 {
-  "dialogo": "lo que Carter dice en voz alta (máx. 3 oraciones, puede incluir una acción breve entre asteriscos)",
+  "dialogo": "lo que Carter dice en voz alta, EN ESPAÑOL (máx. 45 palabras, puede incluir una acción breve entre asteriscos)",
   "disposicion": uno de ${JSON.stringify(DISPOSICIONES.filter((d) => d !== 'QUEBRADO'))},
   "gesto": uno de ${JSON.stringify(GESTOS)},
   "presion": entero de -10 a 20 (cuánto te afectó la pregunta: -10 si fue amable/inútil, 0 neutra, 10 certera, 20 devastadora),
@@ -63,19 +66,20 @@ function extraerJSON(texto) {
 }
 
 // Llamada directa a la API de Groq (compatible con OpenAI), sin dependencias
-async function llamarGroq(messages, modoJSON) {
+async function llamarGroq(messages, modoJSON, nombreModelo = modelo()) {
   const r = await fetch(groqURL(), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
+      // trim + quitar comillas por si se pegó la clave con espacios o entre comillas
+      Authorization: `Bearer ${process.env.GROQ_API_KEY.trim().replace(/^["']|["']$/g, '')}`,
     },
     body: JSON.stringify({
-      model: modelo(),
+      model: nombreModelo,
       messages,
-      temperature: 0.8,
-      max_completion_tokens: 1500,
-      reasoning_effort: 'low', // gpt-oss: razonamiento corto = respuestas rápidas
+      temperature: 0.9,
+      max_completion_tokens: 900,
+      reasoning_effort: 'low', // el prompt ya guía bien; low gasta menos tokens y responde más rápido
       ...(modoJSON ? { response_format: { type: 'json_object' } } : {}),
     }),
   });
@@ -83,6 +87,9 @@ async function llamarGroq(messages, modoJSON) {
   if (!r.ok) {
     const err = new Error(datos?.error?.message || `Groq respondió ${r.status}`);
     err.status = r.status;
+    // Groq indica cuánto esperar: cabecera retry-after o "try again in 6.2s"
+    const m = String(datos?.error?.message || '').match(/try again in ([\d.]+)s/i);
+    err.esperaMs = Number(r.headers.get('retry-after')) * 1000 || (m ? Number(m[1]) * 1000 : 0);
     throw err;
   }
   return extraerJSON(datos.choices?.[0]?.message?.content);
@@ -98,6 +105,22 @@ async function preguntarAlModelo(messages) {
     } catch (err) {
       ultimoError = err;
       if (err.status === 401) break; // clave inválida: no tiene sentido reintentar
+      if (err.status === 429) {
+        // Límite por minuto: 1) probar ya el modelo de respaldo (tiene su propio límite)
+        try {
+          const json = await llamarGroq(messages, true, modeloRespaldo());
+          if (json && typeof json.dialogo === 'string' && json.dialogo.trim()) return json;
+        } catch (err2) {
+          ultimoError = err2;
+        }
+        // 2) si también está lleno y la espera es corta, esperar y reintentar el principal
+        const espera = Math.max(err.esperaMs || 0, ultimoError?.esperaMs || 0);
+        if (intento === 1 && espera > 0 && espera <= 12000) {
+          await esperar(espera + 300);
+          continue;
+        }
+        break;
+      }
       // Si el modelo rechaza el modo JSON, se reintenta sin él
       if (err.status === 400) {
         try {
@@ -115,7 +138,10 @@ async function preguntarAlModelo(messages) {
 // Devuelve { status, json } para que cada entorno lo envíe como quiera
 export async function procesarInteraccion(body = {}) {
   if (!process.env.GROQ_API_KEY) {
-    return { status: 500, json: { error: 'Falta GROQ_API_KEY en las variables de entorno.' } };
+    const donde = process.env.VERCEL_ENV
+      ? `Vercel (${process.env.VERCEL_ENV}): agrégala en Settings → Environment Variables para "${process.env.VERCEL_ENV}" y vuelve a desplegar`
+      : 'local: agrégala en el archivo .env.local de la raíz';
+    return { status: 500, json: { error: `Falta GROQ_API_KEY en ${donde}.` } };
   }
   const pregunta = typeof body.pregunta === 'string' ? body.pregunta.trim().slice(0, MAX_PREGUNTA) : '';
   const evidencia = IDS_EVIDENCIA.includes(body.evidencia) ? body.evidencia : null;
@@ -128,14 +154,19 @@ export async function procesarInteraccion(body = {}) {
     : pregunta;
 
   const messages = [
-    { role: 'system', content: construirPromptSistema(estado, evidencia) },
+    { role: 'system', content: construirPromptSistema(estado, evidencia, pregunta) },
     ...sanearHistorial(body.historial),
     { role: 'user', content: textoDetective },
   ];
+  // Recordatorio al final del contexto (los modelos chicos atienden más a lo último)
+  messages.push({
+    role: 'system',
+    content: 'Responde como Carter a ESA pregunta concreta, EN ESPAÑOL, en máximo 45 palabras, con detalles de tu versión y sin repetir frases anteriores. Solo el JSON.',
+  });
 
   try {
     const propuesta = await preguntarAlModelo(messages);
-    const turno = aplicarTurno(estado, propuesta, evidencia);
+    const turno = aplicarTurno(estado, propuesta, evidencia, pregunta);
     return {
       status: 200,
       json: {
@@ -189,7 +220,19 @@ export async function guardarNota(body = {}) {
 }
 
 export function salud() {
-  return { status: 200, json: { ok: true, modelo: modelo(), groq: Boolean(process.env.GROQ_API_KEY) } };
+  const clave = (process.env.GROQ_API_KEY || '').trim().replace(/^["']|["']$/g, '');
+  return {
+    status: 200,
+    json: {
+      ok: true,
+      modelo: modelo(),
+      groq: Boolean(clave),
+      // Diagnóstico sin revelar la clave
+      clave_formato_ok: clave ? /^gsk_[A-Za-z0-9]{20,}$/.test(clave.trim()) : null,
+      entorno_vercel: process.env.VERCEL_ENV || 'local', // production | preview | development
+      variables_groq_detectadas: Object.keys(process.env).filter((k) => /groq/i.test(k)),
+    },
+  };
 }
 
 // Límite simple de peticiones por IP (por instancia; suficiente para frenar abusos)
