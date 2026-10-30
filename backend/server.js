@@ -17,7 +17,7 @@ if (missingEnv.length > 0) {
 }
 
 const MODELO = process.env.GROQ_MODEL || 'openai/gpt-oss-20b';
-const port = process.env.PORT || 3001;
+const port = process.env.PORT || 3000;
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 const supabase = process.env.SUPABASE_URL && process.env.SUPABASE_KEY
   ? createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY)
